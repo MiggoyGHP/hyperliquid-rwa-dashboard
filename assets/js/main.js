@@ -173,8 +173,11 @@ async function loadWindows(coin) {
   } catch (e) { console.warn("recent funding failed", coin, e); }
 }
 
+let holdPrefetch = 0; // selections take priority over background prefetch
+
 async function loadFullHistory(coin) {
   if (state.histories.has(coin)) return state.histories.get(coin);
+  holdPrefetch++;
   try {
     const hist = await getFundingHistory(coin);
     state.histories.set(coin, hist);
@@ -182,11 +185,15 @@ async function loadFullHistory(coin) {
     renderOverview();
     return hist;
   } catch (e) { console.warn("history failed", coin, e); return null; }
+  finally { holdPrefetch--; }
 }
 
 async function prefetchTopWindows() {
   const top = [...state.rows].sort((a, b) => (nowApr(b) ?? -9) - (nowApr(a) ?? -9)).slice(0, 10);
-  for (const r of top) await loadWindows(r.coin);
+  for (const r of top) {
+    while (holdPrefetch > 0) await new Promise(res => setTimeout(res, 500));
+    await loadWindows(r.coin);
+  }
 }
 
 /* ---------------- ticker detail ---------------- */
@@ -202,11 +209,30 @@ async function select(coin) {
   $("detail").scrollIntoView({ behavior: "smooth" });
   renderOverview();
 
-  const [hist, ohlc, options] = await Promise.all([
-    loadFullHistory(coin),
+  // Baked data (candles, options) arrives in well under a second; the live
+  // funding history can take ~15s of paced API calls on a cold cache.
+  // Render each piece the moment its data is ready.
+  $("funding-tiles").innerHTML =
+    `<div class="loading"><span class="spin"></span>fetching this ticker's full funding history from Hyperliquid — first visit takes ~15 seconds, instant after that…</div>`;
+
+  const histP = loadFullHistory(coin);
+  const [ohlc, options] = await Promise.all([
     getOhlc(row.yahoo).catch(() => null),
     row.hasOptions ? getOptions(row.yahoo).catch(() => null) : Promise.resolve(null),
   ]);
+
+  if (ohlc) {
+    $("candles-title").textContent = `${row.sym} — daily candles`;
+    renderCandles($("candles-chart"), ohlc.candles);
+    legend($("candles-legend"), [[COLOR.pos, "up day"], [COLOR.neg, "down day"]]);
+  }
+  state.calc.options = options;
+  state.calc.ohlc = ohlc;
+  if (options) chain.load(options);
+  initCalculator(row, options);
+
+  const hist = await histP;
+  if (state.selected !== coin) return; // user moved on while we fetched
 
   if (hist) {
     const w = state.windows.get(coin);
@@ -227,18 +253,10 @@ async function select(coin) {
     renderFundingChart($("funding-chart"), annualizedSeries(hist));
     legend($("funding-legend"), [[COLOR.pos, "shorts collect"], [COLOR.neg, "shorts pay"]]);
     renderCumulativeChart($("cumfunding-chart"), cumulativeSeries(hist));
+    initCalculator(row, options); // re-init so the APR default uses real windows
+  } else {
+    $("funding-tiles").innerHTML = `<div class="err">Couldn't load funding history right now — the live API may be rate-limiting. Try again in a minute.</div>`;
   }
-
-  if (ohlc) {
-    $("candles-title").textContent = `${row.sym} — daily candles`;
-    renderCandles($("candles-chart"), ohlc.candles);
-    legend($("candles-legend"), [[COLOR.pos, "up day"], [COLOR.neg, "down day"]]);
-  }
-
-  state.calc.options = options;
-  state.calc.ohlc = ohlc;
-  if (options) chain.load(options);
-  initCalculator(row, options);
 }
 
 /* ---------------- options chain ---------------- */
