@@ -1,0 +1,64 @@
+// Funding-window math. Input: { t: [ms…], r: [hourly decimal rate…] } ascending.
+
+export const HOURS_PER_YEAR = 24 * 365;
+
+// Simple sum of hourly rates in [since, now] as a decimal (compounding is
+// negligible at funding magnitudes; stated in the methodology).
+function windowStats(hist, sinceMs) {
+  let sum = 0, n = 0;
+  for (let i = hist.t.length - 1; i >= 0 && hist.t[i] >= sinceMs; i--) {
+    sum += hist.r[i];
+    n++;
+  }
+  return { sum, n, apr: n ? (sum / n) * HOURS_PER_YEAR : null };
+}
+
+export function fundingWindows(hist, nowMs = Date.now()) {
+  const H = 3600e3;
+  const latest = hist.r.length ? hist.r[hist.r.length - 1] : null;
+  return {
+    h1: { sum: latest ?? 0, n: latest === null ? 0 : 1, apr: latest === null ? null : latest * HOURS_PER_YEAR },
+    h8: windowStats(hist, nowMs - 8 * H),
+    h24: windowStats(hist, nowMs - 24 * H),
+    d7: windowStats(hist, nowMs - 7 * 24 * H),
+    d30: windowStats(hist, nowMs - 30 * 24 * H),
+    all: windowStats(hist, 0),
+  };
+}
+
+// Series for charts.
+export function annualizedSeries(hist) {
+  return hist.t.map((t, i) => ({ time: Math.floor(t / 1000), value: hist.r[i] * HOURS_PER_YEAR * 100 }));
+}
+
+export function cumulativeSeries(hist) {
+  let acc = 0;
+  return hist.t.map((t, i) => {
+    acc += hist.r[i];
+    return { time: Math.floor(t / 1000), value: acc * 100 };
+  });
+}
+
+// Worst funding stretch a short actually lived through: minimum rolling
+// 30-day sum of hourly rates, as a decimal. Positive result => never bad.
+export function worstRolling30d(hist) {
+  const W = 30 * 24 * 3600e3;
+  if (!hist.t.length) return null;
+  let worst = Infinity, sum = 0, lo = 0;
+  for (let hi = 0; hi < hist.t.length; hi++) {
+    sum += hist.r[hi];
+    while (hist.t[lo] < hist.t[hi] - W) { sum -= hist.r[lo]; lo++; }
+    if (hist.t[hi] - hist.t[0] >= W && sum < worst) worst = sum;
+  }
+  return worst === Infinity ? null : worst;
+}
+
+export const fmtPct = (x, dp = 2) =>
+  x === null || x === undefined || Number.isNaN(x) ? "—" : `${x >= 0 ? "+" : ""}${(x * 100).toFixed(dp)}%`;
+
+export const fmtAprPct = (x, dp = 1) =>
+  x === null || x === undefined || Number.isNaN(x) ? "—" : `${x >= 0 ? "+" : ""}${(x * 100).toFixed(dp)}%`;
+
+export const fmtUsd = (x, dp = 0) =>
+  x === null || x === undefined || Number.isNaN(x) ? "—"
+    : (x < 0 ? "-$" : "$") + Math.abs(x).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
