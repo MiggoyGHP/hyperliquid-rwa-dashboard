@@ -40,9 +40,10 @@ export function cumulativeSeries(hist) {
 }
 
 // Worst funding stretch a short actually lived through: minimum rolling
-// 30-day sum of hourly rates, as a decimal. Positive result => never bad.
-export function worstRolling30d(hist) {
-  const W = 30 * 24 * 3600e3;
+// N-day sum of hourly rates, as a decimal. Positive result => never bad.
+// Returns null when the history is shorter than the window.
+export function worstRolling(hist, days) {
+  const W = days * 24 * 3600e3;
   if (!hist.t.length) return null;
   let worst = Infinity, sum = 0, lo = 0;
   for (let hi = 0; hi < hist.t.length; hi++) {
@@ -51,6 +52,40 @@ export function worstRolling30d(hist) {
     if (hist.t[hi] - hist.t[0] >= W && sum < worst) worst = sum;
   }
   return worst === Infinity ? null : worst;
+}
+
+export const worstRolling30d = hist => worstRolling(hist, 30);
+
+// Stability lens on a funding stream: is the mean persistent across windows,
+// how often does it flip negative, what was the worst stretch, and how noisy
+// is the day-to-day take. All rates are decimals in APR units except posShare.
+export function stabilityStats(hist, nowMs = Date.now()) {
+  const D = 24 * 3600e3;
+  const mean = days => windowStats(hist, nowMs - days * D).apr;
+  const n = hist.r.length;
+  const posShare = n ? hist.r.filter(r => r > 0).length / n : null;
+
+  // Volatility of the stream: std dev of daily funding sums, annualized (√365).
+  const byDay = new Map();
+  hist.t.forEach((t, i) => {
+    const d = Math.floor(t / D);
+    byDay.set(d, (byDay.get(d) || 0) + hist.r[i]);
+  });
+  const daily = [...byDay.values()];
+  let aprVol = null;
+  if (daily.length >= 2) {
+    const m = daily.reduce((a, b) => a + b, 0) / daily.length;
+    aprVol = Math.sqrt(daily.reduce((a, b) => a + (b - m) ** 2, 0) / daily.length) * Math.sqrt(365);
+  }
+
+  return {
+    mean7: mean(7), mean30: mean(30), mean90: mean(90),
+    meanAll: windowStats(hist, 0).apr,
+    posShare,
+    worst7: worstRolling(hist, 7),
+    worst30: worstRolling(hist, 30),
+    aprVol,
+  };
 }
 
 export const fmtPct = (x, dp = 2) =>

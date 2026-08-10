@@ -155,6 +155,10 @@ NAMES = {
     "URNM": "Uranium Miners ETF (URNM)", "XLE": "Energy ETF (XLE)",
 }
 
+# Crypto perps on Hyperliquid's default (main) dex: coin -> display name.
+# No Yahoo mapping — OHLC comes from Hyperliquid's own candle API.
+CRYPTO = {"BTC": "Bitcoin", "ETH": "Ethereum", "HYPE": "Hyperliquid"}
+
 DEX = "xyz"
 
 

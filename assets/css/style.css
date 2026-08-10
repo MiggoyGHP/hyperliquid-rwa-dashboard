@@ -185,6 +185,11 @@ tbody tr.pick { cursor: pointer; }
 tbody tr.pick:hover td { background: var(--surface-3); }
 tbody tr[aria-selected="true"] td { background: var(--pos-dim); }
 td .nm { color: var(--ink-3); font-size: 11.5px; margin-left: 7px; }
+.tag-crypto {
+  font-family: var(--font-mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--violet, #8B6FE8); border: 1px solid currentColor; border-radius: 999px;
+  padding: 1px 6px; margin-left: 7px; vertical-align: 1px;
+}
 .num-pos { color: var(--pos); }
 .num-neg { color: var(--neg); }
 .muted { color: var(--ink-3); }

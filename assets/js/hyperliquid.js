@@ -33,11 +33,12 @@ function post(body) {
   return p;
 }
 
-// One call: every xyz asset's live context (mark price, current hourly funding, …)
+// Every asset's live context (mark price, current hourly funding, …) across
+// both dexes we care about: xyz (tokenized stocks, prefixed names) and the
+// default dex (BTC/ETH/HYPE, bare names). Keys never collide.
 export async function getAssetCtxs() {
-  const [meta, ctxs] = await post({ type: "metaAndAssetCtxs", dex: DEX });
   const out = new Map();
-  meta.universe.forEach((asset, i) => {
+  const addAll = ([meta, ctxs]) => meta.universe.forEach((asset, i) => {
     if (asset.isDelisted) return;
     const ctx = ctxs[i] || {};
     out.set(asset.name, {
@@ -50,6 +51,12 @@ export async function getAssetCtxs() {
       dayNtlVlm: parseFloat(ctx.dayNtlVlm),
     });
   });
+  const [xyz, main] = await Promise.all([
+    post({ type: "metaAndAssetCtxs", dex: DEX }),
+    post({ type: "metaAndAssetCtxs" }),
+  ]);
+  addAll(xyz);
+  addAll(main);
   return out;
 }
 

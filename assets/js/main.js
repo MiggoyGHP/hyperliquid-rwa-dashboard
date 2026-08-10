@@ -1,10 +1,10 @@
 import { getAssetCtxs, getFundingHistory, getRecentFunding } from "./hyperliquid.js";
 import { getMeta, getOhlc, getOptions } from "./baked.js";
 import {
-  fundingWindows, annualizedSeries, cumulativeSeries, worstRolling30d,
-  fmtAprPct, fmtUsd, HOURS_PER_YEAR,
+  fundingWindows, annualizedSeries, cumulativeSeries, worstRolling30d, stabilityStats,
+  fmtPct, fmtAprPct, fmtUsd, HOURS_PER_YEAR,
 } from "./funding.js";
-import { renderFundingChart, renderCumulativeChart, renderCandles, legend } from "./charts.js";
+import { renderFundingChart, renderCumulativeChart, renderCandles, clearChart, legend } from "./charts.js";
 import { initChain } from "./optionsTable.js";
 import { VARIANTS, defaultStrike, compute } from "./strategy.js";
 import { renderRiskReward } from "./riskpanel.js";
@@ -41,7 +41,12 @@ async function boot() {
   $("baked-badge-text").textContent = `stocks & options as of ${asOf.toISOString().slice(0, 10)}`;
 
   state.rows = state.meta.tickers
-    .map(t => ({ ...t, sym: t.coin.split(":")[1], ctx: ctxs.get(t.coin) }))
+    .map(t => ({
+      ...t,
+      sym: t.coin.includes(":") ? t.coin.split(":")[1] : t.coin,
+      kind: t.kind || "rwa",
+      ctx: ctxs.get(t.coin),
+    }))
     .filter(t => t.ctx);
 
   renderBoard();
@@ -71,7 +76,7 @@ function renderBoard() {
     .slice(0, 8);
   $("board-rows").innerHTML = top.map(r => `
     <button class="board-row" data-coin="${r.coin}">
-      <span><span class="sym">${r.sym}</span><span class="nm">${r.name}</span></span>
+      <span><span class="sym">${r.sym}</span>${r.kind === "crypto" ? '<span class="tag-crypto">crypto</span>' : ""}<span class="nm">${r.name}</span></span>
       <span class="apr ${nowApr(r) >= 0 ? "pos" : "neg"}">${fmtAprPct(nowApr(r))}</span>
     </button>`).join("");
   $("board-rows").querySelectorAll("[data-coin]").forEach(el =>
@@ -81,7 +86,7 @@ function renderBoard() {
 /* ---------------- overview table ---------------- */
 const COLS = [
   { key: "sym", label: "Ticker", sortable: true },
-  { key: "spot", label: "Stock close", sortable: true },
+  { key: "spot", label: "Last close", sortable: true },
   { key: "mark", label: "Perp price", sortable: true },
   { key: "nowApr", label: "Funding now (APR)", sortable: true },
   { key: "h24", label: "24h (APR)", sortable: true },
@@ -139,7 +144,7 @@ function renderOverview() {
       ? `<td class="muted">…</td>`
       : `<td class="${aprClass(v)}">${fmtAprPct(v)}</td>`;
     return `<tr class="pick" data-coin="${r.coin}" aria-selected="${state.selected === r.coin}">
-      <td class="txt"><b>${r.sym}</b><span class="nm">${r.name}</span></td>
+      <td class="txt"><b>${r.sym}</b>${r.kind === "crypto" ? '<span class="tag-crypto">crypto</span>' : ""}<span class="nm">${r.name}</span></td>
       <td>${r.spot ? "$" + r.spot.toFixed(2) : "—"}</td>
       <td>${Number.isFinite(r.ctx?.markPx) ? "$" + r.ctx.markPx.toFixed(2) : "—"}</td>
       ${cell(nowApr(r))}
@@ -204,8 +209,10 @@ async function select(coin) {
   ["detail", "options", "strategy"].forEach(id => { $(id).hidden = false; });
   $("options").hidden = !row.hasOptions;
   $("detail-title").textContent = `${row.name} (${row.sym})`;
-  $("detail-sub").innerHTML = `Perp <b>${row.coin}</b> on Hyperliquid vs ${row.sym} on the stock exchange.` +
-    (row.hasOptions ? "" : " <b>No listed options for this name</b> — hedge with the real stock only.");
+  $("detail-sub").innerHTML = row.kind === "crypto"
+    ? `Perp <b>${row.coin}</b> on Hyperliquid (main dex). Crypto asset — hedge by holding spot ${row.sym} on any exchange; there is no stock or options leg.`
+    : `Perp <b>${row.coin}</b> on Hyperliquid vs ${row.sym} on the stock exchange.` +
+      (row.hasOptions ? "" : " <b>No listed options for this name</b> — hedge with the real stock only.");
   $("detail").scrollIntoView({ behavior: "smooth" });
   renderOverview();
 
@@ -214,6 +221,7 @@ async function select(coin) {
   // Render each piece the moment its data is ready.
   $("funding-tiles").innerHTML =
     `<div class="loading"><span class="spin"></span>fetching this ticker's full funding history from Hyperliquid — first visit takes ~15 seconds, instant after that…</div>`;
+  $("stability-tiles").innerHTML = "";
 
   const histP = loadFullHistory(coin);
   const [ohlc, options] = await Promise.all([
@@ -221,10 +229,16 @@ async function select(coin) {
     row.hasOptions ? getOptions(row.yahoo).catch(() => null) : Promise.resolve(null),
   ]);
 
+  $("candles-title").textContent = `${row.sym} — daily candles`;
+  $("candles-sub").textContent = row.kind === "crypto"
+    ? "Daily candles from Hyperliquid's own candle API (refreshed daily)."
+    : "The real stock on the real exchange (Yahoo Finance daily data, refreshed after each US close).";
   if (ohlc) {
-    $("candles-title").textContent = `${row.sym} — daily candles`;
     renderCandles($("candles-chart"), ohlc.candles);
     legend($("candles-legend"), [[COLOR.pos, "up day"], [COLOR.neg, "down day"]]);
+  } else {
+    clearChart($("candles-chart"));
+    $("candles-legend").innerHTML = "";
   }
   state.calc.options = options;
   state.calc.ohlc = ohlc;
@@ -246,9 +260,26 @@ async function select(coin) {
       tile("Last 24 hours", w.h24) +
       tile("Last 7 days", w.d7) +
       tile("Last 30 days", w.d30) +
-      `<div class="tile"><span class="lbl">Since listing</span>
+      `<div class="tile"><span class="lbl">Since ${hist.t.length ? new Date(hist.t[0]).toISOString().slice(0, 10) : "listing"}</span>
         <span class="val ${aprClass(w.all.sum)}">${fmtAprPct(w.all.sum, 1)}</span>
         <span class="sub">total collected · ${fmtAprPct(w.all.apr)} annualized</span></div>`;
+
+    const s = stabilityStats(hist);
+    const sTile = (lbl, val, sub, cls = "muted") => `
+      <div class="tile"><span class="lbl">${lbl}</span>
+        <span class="val ${cls}">${val}</span>
+        <span class="sub">${sub}</span></div>`;
+    $("stability-tiles").innerHTML =
+      sTile("Mean APR — 7d", fmtAprPct(s.mean7), "what's happening now", aprClass(s.mean7)) +
+      sTile("Mean APR — 30d", fmtAprPct(s.mean30), "primary judgment window", aprClass(s.mean30)) +
+      sTile("Mean APR — 90d", fmtAprPct(s.mean90), "persistence check", aprClass(s.mean90)) +
+      sTile("Mean APR — all history", fmtAprPct(s.meanAll), `${hist.t.length.toLocaleString()} hourly records`, aprClass(s.meanAll)) +
+      sTile("Hours positive", s.posShare === null ? "—" : (s.posShare * 100).toFixed(0) + "%",
+        "share of hours shorts collected", s.posShare === null ? "muted" : s.posShare >= 0.7 ? "num-pos" : "num-neg") +
+      sTile("Worst 7-day stretch", fmtPct(s.worst7), "lowest rolling 7d take, % of position", aprClass(s.worst7)) +
+      sTile("Worst 30-day stretch", fmtPct(s.worst30), "lowest rolling 30d take, % of position", aprClass(s.worst30)) +
+      sTile("APR volatility (ann.)", s.aprVol === null ? "—" : (s.aprVol * 100).toFixed(1) + "%",
+        "std dev of daily funding, annualized");
 
     renderFundingChart($("funding-chart"), annualizedSeries(hist));
     legend($("funding-legend"), [[COLOR.pos, "shorts collect"], [COLOR.neg, "shorts pay"]]);
@@ -274,11 +305,18 @@ function initCalculator(row, options) {
   $("options-title").textContent = `${row.sym} options chain`;
 
   const pick = $("variant-pick");
-  pick.innerHTML = Object.entries(VARIANTS).map(([k, v]) => {
-    const disabled = k !== "stock" && !options;
-    return `<button class="chip" data-variant="${k}" aria-pressed="${state.calc.variant === k}" ${disabled ? "disabled" : ""}>
-      ${v.label}<small>${v.small}</small></button>`;
-  }).join("");
+  if (row.kind === "crypto") {
+    // Spot crypto is the only hedge leg: same math as the stock variant.
+    state.calc.variant = "stock";
+    pick.innerHTML = `<button class="chip" data-variant="stock" aria-pressed="true">
+      Hold spot ${row.sym}<small>1 coin hedges 1 coin. Buy on any exchange.</small></button>`;
+  } else {
+    pick.innerHTML = Object.entries(VARIANTS).map(([k, v]) => {
+      const disabled = k !== "stock" && !options;
+      return `<button class="chip" data-variant="${k}" aria-pressed="${state.calc.variant === k}" ${disabled ? "disabled" : ""}>
+        ${v.label}<small>${v.small}</small></button>`;
+    }).join("");
+  }
   pick.querySelectorAll("[data-variant]").forEach(b => b.addEventListener("click", () => {
     state.calc.variant = b.dataset.variant;
     pick.querySelectorAll("[data-variant]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
@@ -370,6 +408,7 @@ function recalc(row) {
     renderRiskReward({ calc: null }, riskEls());
     return;
   }
+  if (row.kind === "crypto") calc.legDesc = calc.legDesc.replace("shares", row.sym);
 
   const y = calc.annualized;
   $("yield-big").textContent = y === null ? "∞" : fmtAprPct(y);
@@ -393,6 +432,7 @@ function recalc(row) {
     calc,
     worst30d: state.histories.has(row.coin) ? worstRolling30d(state.histories.get(row.coin)) : null,
     coin: row.sym,
+    kind: row.kind,
   }, riskEls());
 }
 

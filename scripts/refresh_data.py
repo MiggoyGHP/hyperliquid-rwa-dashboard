@@ -7,7 +7,8 @@ Data sources:
     so Cboe is the options source of truth. Cboe supplies delta directly;
     Black-Scholes is only a fallback for rows missing it.
   - Hyperliquid public API: mark prices, used only to sanity-check the
-    coin->Yahoo mapping.
+    coin->Yahoo mapping; daily candles for crypto perps (BTC/ETH/HYPE),
+    which have no stock/options leg.
 
 Outputs (all under data/):
   meta.json           refresh timestamp, risk-free rate, ticker index, errors
@@ -34,7 +35,7 @@ from datetime import datetime, timezone, date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from tickers import TICKERS, EXCLUDED, NAMES, DEX, coin_name
+from tickers import TICKERS, EXCLUDED, NAMES, CRYPTO, DEX, coin_name
 from black_scholes import call_delta, put_delta
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -98,6 +99,36 @@ def fetch_hl_marks():
     return marks, live_coins
 
 
+def fetch_hl_default_marks():
+    """coin -> mark price on Hyperliquid's default (main) perp dex."""
+    req = urllib.request.Request(
+        "https://api.hyperliquid.xyz/info",
+        data=json.dumps({"type": "metaAndAssetCtxs"}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    meta, ctxs = json.load(urllib.request.urlopen(req, timeout=30))
+    marks = {}
+    for asset, ctx in zip(meta["universe"], ctxs):
+        try:
+            marks[asset["name"]] = float(ctx["markPx"])
+        except (KeyError, TypeError, ValueError):
+            pass
+    return marks
+
+
+def fetch_hl_candles(coin):
+    now_ms = int(time.time() * 1000)
+    req = urllib.request.Request(
+        "https://api.hyperliquid.xyz/info",
+        data=json.dumps({"type": "candleSnapshot", "req": {
+            "coin": coin, "interval": "1d",
+            "startTime": now_ms - 2 * 365 * 86400 * 1000, "endTime": now_ms,
+        }}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    return json.load(urllib.request.urlopen(req, timeout=30))
+
+
 def fetch_risk_free(yf):
     try:
         h = with_retries(lambda: yf.Ticker("^IRX").history(period="5d"))
@@ -126,6 +157,29 @@ def bake_ohlc(yf, sym):
     spot = candles[-1]["c"]
     write_json(DATA / "ohlc" / f"{sym}.json", {
         "symbol": sym,
+        "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "candles": candles,
+    })
+    return spot
+
+
+def bake_crypto_ohlc(coin):
+    """Daily candles from Hyperliquid's candle API (OHLCV arrive as strings)."""
+    recs = with_retries(lambda: fetch_hl_candles(coin))
+    if not recs:
+        raise RuntimeError("empty candle snapshot")
+    candles = [
+        {
+            "t": datetime.fromtimestamp(r["t"] / 1000, timezone.utc).strftime("%Y-%m-%d"),
+            "o": rnd(r["o"]), "h": rnd(r["h"]),
+            "l": rnd(r["l"]), "c": rnd(r["c"]),
+            "v": rnd(r["v"], 2) or 0,
+        }
+        for r in recs
+    ]
+    spot = candles[-1]["c"]
+    write_json(DATA / "ohlc" / f"{coin}.json", {
+        "symbol": coin,
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "candles": candles,
     })
@@ -202,10 +256,12 @@ def main():
 
     selected = {c: y for c, y in TICKERS.items()
                 if not args.tickers or c in args.tickers.upper().split(",")}
-    if not selected:
+    crypto_selected = [c for c in CRYPTO
+                       if not args.tickers or c in args.tickers.upper().split(",")]
+    if not selected and not crypto_selected:
         sys.exit("no tickers selected")
 
-    log(f"baking {len(selected)} tickers")
+    log(f"baking {len(selected)} tickers + {len(crypto_selected)} crypto perps")
     try:
         hl_marks, live_coins = fetch_hl_marks()
     except Exception as e:
@@ -251,6 +307,33 @@ def main():
             index.append(entry)
         time.sleep(PACE_SECONDS)
 
+    crypto_marks = {}
+    if crypto_selected:
+        try:
+            crypto_marks = with_retries(fetch_hl_default_marks)
+        except Exception as e:
+            log(f"WARN: Hyperliquid main-dex price check unavailable: {e}")
+    for i, coin in enumerate(crypto_selected, 1):
+        entry = {"coin": coin, "yahoo": coin, "name": CRYPTO[coin],
+                 "hasOptions": False, "dex": "", "kind": "crypto"}
+        try:
+            spot = bake_crypto_ohlc(coin)
+            entry["spot"] = spot
+            mark = crypto_marks.get(coin)
+            if mark and spot:
+                diff = abs(mark - spot) / spot * 100
+                if diff > PRICE_MISMATCH_PCT:
+                    errors.append({"ticker": coin, "stage": "price-check",
+                                   "error": f"HL mark {mark} vs HL close {spot} ({diff:.0f}% apart)"})
+            log(f"(crypto {i}/{len(crypto_selected)}) {coin}: spot {spot}")
+        except Exception as e:
+            errors.append({"ticker": coin, "stage": "bake", "error": str(e)[:300]})
+            log(f"(crypto {i}/{len(crypto_selected)}) {coin}: FAILED - {e}")
+            entry["stale"] = True
+        if (DATA / "ohlc" / f"{coin}.json").exists():
+            index.append(entry)
+        time.sleep(PACE_SECONDS)
+
     write_json(DATA / "meta.json", {
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "riskFreeRate": rnd(r, 4), "riskFreeSource": r_source,
@@ -262,7 +345,7 @@ def main():
 
     failed = {e["ticker"] for e in errors if e["stage"] == "bake"}
     log(f"done: {len(index)} tickers indexed, {len(failed)} failed")
-    if len(failed) > len(selected) / 2:
+    if len(failed) > (len(selected) + len(crypto_selected)) / 2:
         sys.exit(1)
 
 

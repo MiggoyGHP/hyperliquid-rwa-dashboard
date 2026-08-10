@@ -2,8 +2,10 @@ name: Refresh market data
 
 on:
   schedule:
-    # ~21:35 UTC weekdays = after US market close (16:00 ET) in both DST regimes
-    - cron: "35 21 * * 1-5"
+    # ~21:35 UTC daily = after US market close (16:00 ET) in both DST regimes.
+    # Daily (not weekdays-only) because crypto candles (BTC/ETH/HYPE) move on
+    # weekends too; weekend stock re-bakes are harmless no-ops.
+    - cron: "35 21 * * *"
   workflow_dispatch: {}
 
 permissions:

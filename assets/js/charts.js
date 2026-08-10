@@ -90,6 +90,11 @@ export function renderCandles(el, candles) {
   return chart;
 }
 
+export function clearChart(el) {
+  const prev = charts.get(el.id);
+  if (prev) { prev.remove(); charts.delete(el.id); }
+}
+
 export function legend(el, items) {
   el.innerHTML = items
     .map(([color, label]) => `<span><span class="sw" style="background:${color}"></span>${label}</span>`)

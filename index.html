@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Funding Harvest — Hyperliquid Tokenized-Stock Funding vs the Real Stock</title>
-<meta name="description" content="Live study of funding rates on Hyperliquid's tokenized-stock perps, compared with the real stock and its options — and what a hedged funding-harvest trade earns and risks.">
+<title>Funding Harvest — Hyperliquid Tokenized-Stock &amp; Crypto Perp Funding</title>
+<meta name="description" content="Live study of funding rates on Hyperliquid's tokenized-stock perps plus BTC, ETH and HYPE, compared with the real asset and its options — and what a hedged funding-harvest trade earns and risks.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🌾</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -24,11 +24,12 @@
   <div class="wrap">
     <h1>Stocks on a crypto exchange pay <span class="accent">rent</span>.<br>This page measures it.</h1>
     <p class="lede">
-      Hyperliquid lists 24/7 futures on real stocks — Tesla, Nvidia, Apple and ~55 more.
+      Hyperliquid lists 24/7 futures on real stocks — Tesla, Nvidia, Apple and ~55 more —
+      plus crypto perps like BTC, ETH and HYPE, shown here for comparison.
       Every hour, one side of each market pays the other a small fee called the
       <strong>funding rate</strong>. When the rate is positive, people betting <em>against</em> the
-      stock collect it. This dashboard tracks those payments live, compares them with the real
-      stock and its options, and works out what a hedged "collect-the-rent" trade earns — and risks.
+      asset collect it. This dashboard tracks those payments live, compares them with the real
+      asset and its options, and works out what a hedged "collect-the-rent" trade earns — and risks.
     </p>
 
     <!-- signature element: live harvest board -->
@@ -76,8 +77,8 @@
 <section id="market">
   <div class="wrap">
     <p class="eyebrow">Step 2 · The whole market</p>
-    <h2>Every tokenized stock, side by side</h2>
-    <p class="sec-note">Live funding from Hyperliquid next to yesterday's stock close.
+    <h2>Every market, side by side</h2>
+    <p class="sec-note">Live funding from Hyperliquid next to yesterday's close — tokenized stocks and crypto perps (badged) in one list.
       Sort by any column. The trailing columns are the funding a short would have actually collected over that window.</p>
     <div class="tbl-scroll" style="max-height: 480px; overflow-y: auto;">
       <table id="overview-tbl">
@@ -112,8 +113,15 @@
     </div>
 
     <div class="chart-card">
-      <h3 id="candles-title">Stock price — daily candles</h3>
-      <p class="sub">The real stock on the real exchange (Yahoo Finance daily data, refreshed after each US close).</p>
+      <h3>Funding stability</h3>
+      <p class="sub">Is this rate dependable? Persistent means across windows, few negative hours, shallow worst
+        stretches and low volatility read as stable; a hot 7d mean over a flat 90d mean reads as a spike.</p>
+      <div class="tiles" id="stability-tiles" style="margin:0"></div>
+    </div>
+
+    <div class="chart-card">
+      <h3 id="candles-title">Price — daily candles</h3>
+      <p class="sub" id="candles-sub">The real stock on the real exchange (Yahoo Finance daily data, refreshed after each US close).</p>
       <div class="chart-box tall" id="candles-chart"></div>
       <div class="chart-legend" id="candles-legend"></div>
     </div>
@@ -209,7 +217,8 @@
       <h4>Methodology</h4>
       <p>Funding: Hyperliquid public API, hourly rates, fetched live by your browser. "Annualized" multiplies an
       hourly rate by 24 × 365. Trailing windows sum the actual hourly rates in that window.
-      Stock candles: Yahoo Finance daily data. Options: Cboe delayed quotes including delta
+      Stock candles: Yahoo Finance daily data. Crypto candles (BTC, ETH, HYPE) come from Hyperliquid's own
+      candle API. Options: Cboe delayed quotes including delta
       (dividends ignored where we compute delta ourselves, which slightly flatters calls on dividend payers).
       Stock and options data refresh once per US trading day; funding is always live.
       Option contract counts are shown pro-rata (fractional); real trades round to whole 100-share contracts.</p>
