@@ -22,16 +22,6 @@
 
 <div class="hero">
   <div class="wrap">
-    <h1>Stocks on a crypto exchange pay <span class="accent">rent</span>.<br>This page measures it.</h1>
-    <p class="lede">
-      Hyperliquid lists 24/7 futures on real stocks — Tesla, Nvidia, Apple and ~55 more —
-      plus crypto perps like BTC, ETH and HYPE, shown here for comparison.
-      Every hour, one side of each market pays the other a small fee called the
-      <strong>funding rate</strong>. When the rate is positive, people betting <em>against</em> the
-      asset collect it. This dashboard tracks those payments live, compares them with the real
-      asset and its options, and works out what a hedged "collect-the-rent" trade earns — and risks.
-    </p>
-
     <!-- signature element: live harvest board -->
     <div class="board" aria-label="Live funding board">
       <div class="board-head">
@@ -46,40 +36,9 @@
   </div>
 </div>
 
-<section id="how">
-  <div class="wrap">
-    <p class="eyebrow">Step 1 · How the trade works</p>
-    <h2>Collect the fee, cancel the price risk</h2>
-    <div class="steps">
-      <div class="step">
-        <span class="k">The income leg — sell</span>
-        <h3>Short the stock-perp on Hyperliquid</h3>
-        <p>You "short" (bet against) the tokenized stock. While funding is positive you
-          <span class="pos">collect the hourly fee</span>. Problem: if the stock rises, this leg loses money.</p>
-      </div>
-      <div class="step">
-        <span class="k">The hedge leg — buy</span>
-        <h3>Own the same stock some other way</h3>
-        <p>Buy the real stock, a deep in-the-money call option, or a "synthetic long" (buy a call, sell a put).
-          If the stock rises, this leg <span class="pos">gains what the short loses</span> — and vice versa.</p>
-      </div>
-      <div class="step">
-        <span class="k">The result</span>
-        <h3>Price moves cancel. The fee stays.</h3>
-        <p>What's left is the funding you collected, minus costs. It's not free money:
-          funding can <span class="neg">flip negative</span>, and the two legs live on different venues.
-          The risks section below is the fine print.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
 <section id="market">
   <div class="wrap">
-    <p class="eyebrow">Step 2 · The whole market</p>
     <h2>Every market, side by side</h2>
-    <p class="sec-note">Live funding from Hyperliquid next to yesterday's close — tokenized stocks and crypto perps (badged) in one list.
-      Sort by any column. The trailing columns are the funding a short would have actually collected over that window.</p>
     <div class="tbl-scroll" style="max-height: 480px; overflow-y: auto;">
       <table id="overview-tbl">
         <thead></thead>
@@ -92,7 +51,6 @@
 
 <section id="detail" hidden>
   <div class="wrap">
-    <p class="eyebrow">Step 3 · Under the microscope</p>
     <h2 id="detail-title">—</h2>
     <p class="sec-note" id="detail-sub"></p>
 
@@ -130,11 +88,7 @@
 
 <section id="options" hidden>
   <div class="wrap">
-    <p class="eyebrow">Step 4 · The options toolkit</p>
     <h2 id="options-title">Options chain</h2>
-    <p class="sec-note">Prices for the right to buy (calls) or sell (puts) the stock at each strike.
-      <b>Delta</b> ≈ how much the option moves when the stock moves $1 — a delta near 1.00 behaves like the stock itself.
-      Delayed quotes from Cboe.</p>
     <div class="ctl-row">
       <label class="ctl">Expiry date
         <select id="expiry-select"></select>
@@ -150,12 +104,7 @@
 
 <section id="strategy" hidden>
   <div class="wrap">
-    <p class="eyebrow">Step 5 · Put it together</p>
     <h2>The harvest calculator</h2>
-    <p class="sec-note">Pick how you hedge, how much, and for how long. The calculator uses this ticker's real
-      funding history and real option quotes. Yield = <b>funding collected ÷ cash needed for the hedge leg</b> —
-      cheaper hedges make the same funding go further.</p>
-
     <div class="calc-grid">
       <div class="panel">
         <h3>Your inputs</h3>
@@ -213,28 +162,9 @@
 
 <footer class="foot">
   <div class="wrap">
-    <div>
-      <h4>Methodology</h4>
-      <p>Funding: Hyperliquid public API, hourly rates, fetched live by your browser. "Annualized" multiplies an
-      hourly rate by 24 × 365. Trailing windows sum the actual hourly rates in that window.
-      Stock candles: Yahoo Finance daily data. Crypto candles (BTC, ETH, HYPE) come from Hyperliquid's own
-      candle API. Options: Cboe delayed quotes including delta
-      (dividends ignored where we compute delta ourselves, which slightly flatters calls on dividend payers).
-      Stock and options data refresh once per US trading day; funding is always live.
-      Option contract counts are shown pro-rata (fractional); real trades round to whole 100-share contracts.</p>
-    </div>
-    <div>
-      <h4>What this is not</h4>
-      <p>Not financial advice, not an offer, and not a promise that any past funding rate continues.
-      Funding can flip negative at any hour. The strategy shown involves leverage, options assignment risk,
-      and venues that can fail independently of each other. Numbers here are estimates that exclude
-      slippage, borrow costs, dividends and taxes.</p>
-    </div>
-    <div>
-      <h4>Sources</h4>
-      <p>Hyperliquid public info API · Yahoo Finance via yfinance · Cboe delayed options quotes ·
-      <a href="https://github.com/MiggoyGHP/hyperliquid-rwa-dashboard">source code</a></p>
-    </div>
+    <p>Hyperliquid public API · Yahoo Finance · Cboe delayed quotes ·
+      <a href="https://github.com/MiggoyGHP/hyperliquid-rwa-dashboard">source code</a> ·
+      Not financial advice; funding can flip negative at any hour.</p>
   </div>
 </footer>
 
