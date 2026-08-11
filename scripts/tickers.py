@@ -76,6 +76,9 @@ TICKERS = {
 }
 
 # coin -> reason for exclusion (no Yahoo stock/options data applicable)
+# Only gates the baked candles/options pipeline: excluded coins (and every
+# other builder-dex asset) still appear live in the funding table with a
+# funding-only detail view (see assets/js/classify.js).
 EXCLUDED = {
     # commodities
     "BRENTOIL": "commodity (Brent crude)",

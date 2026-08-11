@@ -39,6 +39,13 @@
 <section id="market">
   <div class="wrap">
     <h2>Funding rates</h2>
+    <div class="ctl-row" id="cat-tabs" style="margin-bottom:10px">
+      <button class="chip" data-cat="all" aria-pressed="true">All</button>
+      <button class="chip" data-cat="stock" aria-pressed="false">Stocks</button>
+      <button class="chip" data-cat="crypto" aria-pressed="false">Crypto</button>
+      <button class="chip" data-cat="commodity" aria-pressed="false">Commodities</button>
+      <button class="chip" data-cat="other" aria-pressed="false">Other</button>
+    </div>
     <div class="tbl-scroll" style="max-height: 480px; overflow-y: auto;">
       <table id="overview-tbl">
         <thead></thead>
@@ -75,7 +82,7 @@
       <div class="tiles" id="stability-tiles" style="margin:0"></div>
     </div>
 
-    <div class="chart-card">
+    <div class="chart-card" id="candles-card">
       <h3 id="candles-title">Price — daily candles</h3>
       <p class="sub" id="candles-sub">The real stock on the real exchange (Yahoo Finance daily data, refreshed after each US close).</p>
       <div class="ctl-row" id="candle-overlays" style="margin:10px 0 6px">

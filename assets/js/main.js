@@ -1,5 +1,6 @@
 import { getAssetCtxs, getFundingHistory, getRecentFunding } from "./hyperliquid.js";
 import { getMeta, getOhlc, getOptions } from "./baked.js";
+import { getDeribitOptions } from "./deribit.js";
 import {
   fundingWindows, annualizedSeries, cumulativeSeries, dailyAprSeries, worstRolling30d, stabilityStats,
   fmtPct, fmtAprPct, fmtUsd, HOURS_PER_YEAR,
@@ -8,6 +9,7 @@ import { renderFundingChart, renderCumulativeChart, renderCandles, emaSeries, cl
 import { initChain } from "./optionsTable.js";
 import { VARIANTS, defaultStrike, compute } from "./strategy.js";
 import { renderRiskReward } from "./riskpanel.js";
+import { classify, DISPLAY_NAMES } from "./classify.js";
 
 const $ = id => document.getElementById(id);
 const COLOR = { pos: "#17A67E", neg: "#D9536F", violet: "#8B6FE8" };
@@ -18,6 +20,7 @@ const state = {
   histories: new Map(),   // coin -> { t, r }
   windows: new Map(),     // coin -> fundingWindows result
   selected: null,
+  catFilter: "all",
   sortKey: "nowApr", sortDir: -1,
   calc: { variant: "stock", expiry: null, strike: null, options: null, ohlc: null },
   overlays: { ema50: false, ema100: false, ema200: false, funding: false },
@@ -27,10 +30,41 @@ const aprClass = x => (x === null || x === undefined ? "muted" : x >= 0 ? "num-p
 const nowApr = row => (Number.isFinite(row.ctx?.funding) ? row.ctx.funding * HOURS_PER_YEAR : null);
 
 /* ---------------- boot ---------------- */
+// The table is live-first: every asset on every dex we poll gets a row,
+// enriched with baked meta (name, spot, options) where a coin matches.
+function buildRows(ctxs) {
+  const metaByCoin = new Map(state.meta.tickers.map(t => [t.coin, t]));
+  const rows = [];
+  for (const ctx of ctxs.values()) {
+    const { dex, sym, cat } = classify(ctx.coin);
+    const m = metaByCoin.get(ctx.coin);
+    // Builder-dex (HIP-3) assets all get rows; the main dex has ~180 crypto
+    // perps and would drown the table, so it's limited to the baked set
+    // (BTC/ETH/HYPE).
+    if (!dex && !m) continue;
+    rows.push({
+      coin: ctx.coin, sym, dex, cat,
+      kind: cat === "crypto" ? "crypto" : "rwa",
+      baked: !!m,
+      name: m?.name ?? DISPLAY_NAMES[sym] ?? sym,
+      yahoo: m?.yahoo,
+      hasOptions: m?.hasOptions ?? false,
+      spot: m?.spot,
+      ctx,
+    });
+  }
+  return rows;
+}
+
 async function boot() {
-  let ctxs;
   try {
-    [state.meta, ctxs] = await Promise.all([getMeta(), getAssetCtxs()]);
+    state.meta = await getMeta();
+    // First dexes to answer render immediately; the rest stream in.
+    await getAssetCtxs(partial => {
+      state.rows = buildRows(partial);
+      renderBoard();
+      renderOverview();
+    });
   } catch (e) {
     $("live-badge-text").textContent = "data failed to load — refresh to retry";
     $("live-badge").classList.remove("live");
@@ -41,17 +75,6 @@ async function boot() {
   const asOf = new Date(state.meta.generatedAt);
   $("baked-badge-text").textContent = `stocks & options as of ${asOf.toISOString().slice(0, 10)}`;
 
-  state.rows = state.meta.tickers
-    .map(t => ({
-      ...t,
-      sym: t.coin.includes(":") ? t.coin.split(":")[1] : t.coin,
-      kind: t.kind || "rwa",
-      ctx: ctxs.get(t.coin),
-    }))
-    .filter(t => t.ctx);
-
-  renderBoard();
-  renderOverview();
   refreshLoop();
   prefetchTopWindows();
 }
@@ -61,7 +84,7 @@ async function refreshLoop() {
   setInterval(async () => {
     try {
       const ctxs = await getAssetCtxs();
-      state.rows.forEach(r => { r.ctx = ctxs.get(r.coin) || r.ctx; });
+      state.rows = buildRows(ctxs); // also picks up newly listed assets
       renderBoard();
       renderOverview();
     } catch { /* transient */ }
@@ -77,12 +100,17 @@ function renderBoard() {
     .slice(0, 8);
   $("board-rows").innerHTML = top.map(r => `
     <button class="board-row" data-coin="${r.coin}">
-      <span><span class="sym">${r.sym}</span>${r.kind === "crypto" ? '<span class="tag-crypto">crypto</span>' : ""}<span class="nm">${r.name}</span></span>
+      <span><span class="sym">${r.sym}</span>${catTags(r)}<span class="nm">${r.name}</span></span>
       <span class="apr ${nowApr(r) >= 0 ? "pos" : "neg"}">${fmtAprPct(nowApr(r))}</span>
     </button>`).join("");
   $("board-rows").querySelectorAll("[data-coin]").forEach(el =>
     el.addEventListener("click", () => select(el.dataset.coin)));
 }
+
+// Category pill for non-stocks + a muted dex badge for builder-dex perps.
+const catTags = r =>
+  (r.cat !== "stock" ? `<span class="tag tag-${r.cat}">${r.cat}</span>` : "") +
+  (r.dex ? `<span class="tag-dex">${r.dex}</span>` : "");
 
 /* ---------------- overview table ---------------- */
 const COLS = [
@@ -130,7 +158,7 @@ function renderOverview() {
     renderOverview();
   }));
 
-  const rows = [...state.rows].sort((a, b) => {
+  const rows = state.rows.filter(r => state.catFilter === "all" || r.cat === state.catFilter).sort((a, b) => {
     const va = rowValue(a, state.sortKey), vb = rowValue(b, state.sortKey);
     if (va === null && vb === null) return 0;
     if (va === null) return 1;
@@ -145,7 +173,7 @@ function renderOverview() {
       ? `<td class="muted">…</td>`
       : `<td class="${aprClass(v)}">${fmtAprPct(v)}</td>`;
     return `<tr class="pick" data-coin="${r.coin}" aria-selected="${state.selected === r.coin}">
-      <td class="txt"><b>${r.sym}</b>${r.kind === "crypto" ? '<span class="tag-crypto">crypto</span>' : ""}<span class="nm">${r.name}</span></td>
+      <td class="txt"><b>${r.sym}</b>${catTags(r)}<span class="nm">${r.name}</span></td>
       <td>${r.spot ? "$" + r.spot.toFixed(2) : "—"}</td>
       <td>${Number.isFinite(r.ctx?.markPx) ? "$" + r.ctx.markPx.toFixed(2) : "—"}</td>
       ${cell(nowApr(r))}
@@ -158,16 +186,35 @@ function renderOverview() {
   body.querySelectorAll("tr[data-coin]").forEach(tr =>
     tr.addEventListener("click", () => select(tr.dataset.coin)));
 
-  const pending = state.rows.filter(r => !state.windows.has(r.coin)).length;
-  $("overview-note").innerHTML = pending
-    ? `Trailing columns are fetched live per ticker (${pending} remaining). <a href="#" id="load-all">Load all now</a> — takes a minute or two the first time; cached after that.`
+  const pendingRows = rows.filter(r => !state.windows.has(r.coin));
+  $("overview-note").innerHTML = pendingRows.length
+    ? `Trailing columns are fetched live per ticker (${pendingRows.length} remaining in this tab). <a href="#" id="load-all">Load all now</a> — takes ~${Math.max(1, Math.ceil(pendingRows.length * 2.2 / 60))} min the first time; cached after that.`
     : "All trailing windows loaded from live Hyperliquid history.";
   const la = $("load-all");
   if (la) la.addEventListener("click", async e => {
     e.preventDefault(); la.replaceWith("loading…");
-    for (const r of state.rows) await loadWindows(r.coin);
+    for (const r of pendingRows) await loadWindows(r.coin);
+  });
+
+  renderTabCounts();
+}
+
+/* ---------------- category tabs ---------------- */
+const CAT_COUNT_LABELS = { all: "All", stock: "Stocks", crypto: "Crypto", commodity: "Commodities", other: "Other" };
+
+function renderTabCounts() {
+  $("cat-tabs").querySelectorAll("[data-cat]").forEach(b => {
+    const cat = b.dataset.cat;
+    const n = cat === "all" ? state.rows.length : state.rows.filter(r => r.cat === cat).length;
+    b.textContent = `${CAT_COUNT_LABELS[cat]} (${n})`;
   });
 }
+
+$("cat-tabs").querySelectorAll("[data-cat]").forEach(b => b.addEventListener("click", () => {
+  state.catFilter = b.dataset.cat;
+  $("cat-tabs").querySelectorAll("[data-cat]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  renderOverview();
+}));
 
 // Overview needs only ~30 days (2 API calls); full history loads on selection.
 async function loadWindows(coin) {
@@ -207,11 +254,17 @@ async function select(coin) {
   const row = state.rows.find(r => r.coin === coin);
   if (!row) return;
   state.selected = coin;
-  ["detail", "options", "strategy"].forEach(id => { $(id).hidden = false; });
-  $("options").hidden = !row.hasOptions;
+  // Assets without baked data (most builder-dex perps) get a funding-only
+  // view: no candles, options chain or calculator — those need Yahoo/Cboe data.
+  $("detail").hidden = false;
+  $("options").hidden = !row.baked || !row.hasOptions;
+  $("strategy").hidden = !row.baked;
+  $("candles-card").hidden = !row.baked;
   $("detail-title").textContent = `${row.name} (${row.sym})`;
-  $("detail-sub").innerHTML = row.kind === "crypto"
-    ? `Perp <b>${row.coin}</b> on Hyperliquid (main dex). Crypto asset — hedge by holding spot ${row.sym} on any exchange; there is no stock or options leg.`
+  $("detail-sub").innerHTML = !row.baked
+    ? `Perp <b>${row.coin}</b> on Hyperliquid${row.dex ? ` builder dex <b>${row.dex}</b>` : ""}. Live funding only — no candle, options or strategy data is baked for this asset.`
+    : row.kind === "crypto"
+    ? `Perp <b>${row.coin}</b> on Hyperliquid (main dex). Crypto asset — hedge by holding spot ${row.sym} on any exchange.`
     : `Perp <b>${row.coin}</b> on Hyperliquid vs ${row.sym} on the stock exchange.` +
       (row.hasOptions ? "" : " <b>No listed options for this name</b> — hedge with the real stock only.");
   $("detail").scrollIntoView({ behavior: "smooth" });
@@ -225,26 +278,43 @@ async function select(coin) {
   $("stability-tiles").innerHTML = "";
 
   const histP = loadFullHistory(coin);
-  const [ohlc, options] = await Promise.all([
-    getOhlc(row.yahoo).catch(() => null),
-    row.hasOptions ? getOptions(row.yahoo).catch(() => null) : Promise.resolve(null),
-  ]);
+  let options = null;
+  if (row.baked) {
+    let ohlc;
+    [ohlc, options] = await Promise.all([
+      getOhlc(row.yahoo).catch(() => null),
+      row.hasOptions ? getOptions(row.yahoo).catch(() => null)
+        : row.kind === "crypto" ? getDeribitOptions(row.sym).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    if (state.selected !== coin) return; // user moved on while we fetched
 
-  $("candles-title").textContent = `${row.sym} — daily candles`;
-  $("candles-sub").textContent = row.kind === "crypto"
-    ? "Daily candles from Hyperliquid's own candle API (refreshed daily)."
-    : "The real stock on the real exchange (Yahoo Finance daily data, refreshed after each US close).";
-  state.calc.options = options;
-  state.calc.ohlc = ohlc;
-  fundingOverlayChip.disabled = !state.histories.has(coin);
-  drawCandles(row);
-  if (options) chain.load(options);
-  initCalculator(row, options);
+    $("candles-title").textContent = `${row.sym} — daily candles`;
+    $("candles-sub").textContent = row.kind === "crypto"
+      ? "Daily candles from Hyperliquid's own candle API (refreshed daily)."
+      : "The real stock on the real exchange (Yahoo Finance daily data, refreshed after each US close).";
+    state.calc.options = options;
+    state.calc.ohlc = ohlc;
+    fundingOverlayChip.disabled = !state.histories.has(coin);
+    drawCandles(row);
+    if (options) chain.load(options);
+    if (row.kind === "crypto") {
+      // Crypto chains come live from Deribit: reveal the section only once a
+      // chain actually exists (BTC/ETH yes, HYPE no — Deribit doesn't list it).
+      $("options").hidden = !options;
+      if (options) $("detail-sub").innerHTML +=
+        ` Deribit lists options on <b>${row.sym}</b> — chain and option-hedged variants below.`;
+    }
+    initCalculator(row, options);
+  } else {
+    state.calc.options = null;
+    state.calc.ohlc = null;
+  }
 
   const hist = await histP;
   if (state.selected !== coin) return; // user moved on while we fetched
   fundingOverlayChip.disabled = !hist;
-  if (hist && state.overlays.funding) drawCandles(row);
+  if (row.baked && hist && state.overlays.funding) drawCandles(row);
 
   if (hist) {
     const w = state.windows.get(coin);
@@ -282,7 +352,7 @@ async function select(coin) {
     renderFundingChart($("funding-chart"), annualizedSeries(hist));
     legend($("funding-legend"), [[COLOR.pos, "shorts collect"], [COLOR.neg, "shorts pay"]]);
     renderCumulativeChart($("cumfunding-chart"), cumulativeSeries(hist));
-    initCalculator(row, options); // re-init so the APR default uses real windows
+    if (row.baked) initCalculator(row, options); // re-init so the APR default uses real windows
   } else {
     $("funding-tiles").innerHTML = `<div class="err">Couldn't load funding history right now — the live API may be rate-limiting. Try again in a minute.</div>`;
   }
@@ -342,16 +412,21 @@ function initCalculator(row, options) {
   $("options-title").textContent = `${row.sym} options chain`;
 
   const pick = $("variant-pick");
-  if (row.kind === "crypto") {
-    // Spot crypto is the only hedge leg: same math as the stock variant.
+  // Crypto rows hedge with spot instead of stock; with a live Deribit chain
+  // they also get the two option-hedged variants, same math as equities.
+  const labelOverride = row.kind === "crypto"
+    ? { stock: { label: `Hold spot ${row.sym}`, small: "1 coin hedges 1 coin. Buy on any exchange." } }
+    : {};
+  if (row.kind === "crypto" && !options) {
     state.calc.variant = "stock";
     pick.innerHTML = `<button class="chip" data-variant="stock" aria-pressed="true">
       Hold spot ${row.sym}<small>1 coin hedges 1 coin. Buy on any exchange.</small></button>`;
   } else {
     pick.innerHTML = Object.entries(VARIANTS).map(([k, v]) => {
+      const { label, small } = labelOverride[k] ?? v;
       const disabled = k !== "stock" && !options;
       return `<button class="chip" data-variant="${k}" aria-pressed="${state.calc.variant === k}" ${disabled ? "disabled" : ""}>
-        ${v.label}<small>${v.small}</small></button>`;
+        ${label}<small>${small}</small></button>`;
     }).join("");
   }
   pick.querySelectorAll("[data-variant]").forEach(b => b.addEventListener("click", () => {
@@ -435,6 +510,7 @@ function recalc(row) {
     spot,
     maxLeverage: row.ctx?.maxLeverage,
     expiryChain: exp ? { ...exp, pickedStrike: state.calc.strike } : null,
+    contractMultiplier: state.calc.options?.contractMultiplier ?? 100,
   });
 
   if (!calc) {

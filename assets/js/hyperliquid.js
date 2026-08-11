@@ -1,42 +1,53 @@
 // Live client for Hyperliquid's public info API (CORS-open, no key needed).
+import { DEXES } from "./classify.js";
+
 const API = "https://api.hyperliquid.xyz/info";
-const DEX = "xyz";
 const PAGE = 500; // fundingHistory returns at most 500 hourly records per call
 const CACHE_PREFIX = "fh1:"; // bump the prefix to invalidate old cache layouts
 const MAX_CACHED = 12; // localStorage is ~5 MB; each ticker ~120 KB
 
-// Hyperliquid's public rate limit is weight-based (~1200/min per IP) and
-// fundingHistory-type requests are heavy, so pace to ~1 call/second and back
-// off hard on 429.
-let queue = Promise.resolve();
-let lastCall = 0;
-function post(body) {
-  const run = async () => {
-    const wait = lastCall + 1100 - Date.now();
-    if (wait > 0) await new Promise(r => setTimeout(r, wait));
-    for (let attempt = 0; ; attempt++) {
-      lastCall = Date.now();
-      const res = await fetch(API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (res.ok) return res.json();
-      if (attempt >= 4) throw new Error(`Hyperliquid API ${res.status}`);
-      const backoff = res.status === 429 ? 4000 * (attempt + 1) : 1000 * (attempt + 1);
-      await new Promise(r => setTimeout(r, backoff));
-    }
-  };
-  // serialize all calls through one queue so parallel callers still pace
-  const p = queue.then(run);
-  queue = p.catch(() => {});
-  return p;
+async function request(body) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) return res.json();
+    if (attempt >= 4) throw new Error(`Hyperliquid API ${res.status}`);
+    const backoff = res.status === 429 ? 4000 * (attempt + 1) : 1000 * (attempt + 1);
+    await new Promise(r => setTimeout(r, backoff));
+  }
 }
 
+// Hyperliquid's public rate limit is weight-based (~1200/min per IP).
+// fundingHistory-type requests are heavy, so they pace to ~1 call/second;
+// metaAndAssetCtxs snapshots are cheap and get their own faster lane so
+// polling 9 dexes doesn't starve history fetches.
+function makeLane(spacingMs) {
+  let queue = Promise.resolve();
+  let lastCall = 0;
+  return body => {
+    const run = async () => {
+      const wait = lastCall + spacingMs - Date.now();
+      if (wait > 0) await new Promise(r => setTimeout(r, wait));
+      lastCall = Date.now();
+      return request(body);
+    };
+    // serialize all calls through one queue so parallel callers still pace
+    const p = queue.then(run);
+    queue = p.catch(() => {});
+    return p;
+  };
+}
+const post = makeLane(1100);      // fundingHistory
+const postLight = makeLane(250);  // metaAndAssetCtxs
+
 // Every asset's live context (mark price, current hourly funding, …) across
-// both dexes we care about: xyz (tokenized stocks, prefixed names) and the
-// default dex (BTC/ETH/HYPE, bare names). Keys never collide.
-export async function getAssetCtxs() {
+// the main dex (BTC/ETH/HYPE, bare names) and every HIP-3 builder dex
+// (prefixed names like "xyz:TSLA"). Keys never collide. Calls onPartial with
+// the growing map after each dex arrives so callers can render progressively.
+export async function getAssetCtxs(onPartial) {
   const out = new Map();
   const addAll = ([meta, ctxs]) => meta.universe.forEach((asset, i) => {
     if (asset.isDelisted) return;
@@ -51,12 +62,14 @@ export async function getAssetCtxs() {
       dayNtlVlm: parseFloat(ctx.dayNtlVlm),
     });
   });
-  const [xyz, main] = await Promise.all([
-    post({ type: "metaAndAssetCtxs", dex: DEX }),
-    post({ type: "metaAndAssetCtxs" }),
-  ]);
-  addAll(xyz);
-  addAll(main);
+  const results = await Promise.allSettled(DEXES.map(dex =>
+    postLight({ type: "metaAndAssetCtxs", ...(dex ? { dex } : {}) })
+      .then(res => { addAll(res); onPartial?.(out); })
+  ));
+  results.forEach((r, i) => {
+    if (r.status === "rejected") console.warn(`metaAndAssetCtxs failed for dex "${DEXES[i] || "main"}"`, r.reason);
+  });
+  if (out.size === 0) throw new Error("all metaAndAssetCtxs requests failed");
   return out;
 }
 

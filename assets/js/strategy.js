@@ -42,7 +42,9 @@ export function defaultStrike(variant, expiryChain, spot) {
   return null;
 }
 
-export function compute({ variant, usd, days, apr, leverage, spot, maxLeverage, expiryChain }) {
+// contractMultiplier: shares per contract — 100 for listed equity options,
+// 1 for Deribit coin options (1 contract = 1 BTC/ETH).
+export function compute({ variant, usd, days, apr, leverage, spot, maxLeverage, expiryChain, contractMultiplier = 100 }) {
   const out = { variant, warnings: [] };
   if (!spot || !usd || !days) return null;
 
@@ -69,9 +71,9 @@ export function compute({ variant, usd, days, apr, leverage, spot, maxLeverage, 
     if (variant === "ditm") {
       if (!call || !call.ask) return null;
       const delta = call.delta || 1;
-      contracts = shares / (100 * delta);
-      const premium = call.ask * 100 * contracts;
-      const intrinsic = Math.max(spot - strike, 0) * 100 * contracts;
+      contracts = shares / (contractMultiplier * delta);
+      const premium = call.ask * contractMultiplier * contracts;
+      const intrinsic = Math.max(spot - strike, 0) * contractMultiplier * contracts;
       const timeValue = Math.max(premium - intrinsic, 0);
       carry = timeValue * frac; // time value bleeds away by expiry
       denom = premium;
@@ -82,15 +84,21 @@ export function compute({ variant, usd, days, apr, leverage, spot, maxLeverage, 
 
     if (variant === "synthetic") {
       if (!call?.ask || !put?.bid) return null;
-      contracts = shares / 100; // synthetic long has delta ≈ 1 by construction
-      const netDebit = (call.ask - put.bid) * 100 * contracts;
-      const intrinsic = (spot - strike) * 100 * contracts;
+      contracts = shares / contractMultiplier; // synthetic long has delta ≈ 1 by construction
+      const netDebit = (call.ask - put.bid) * contractMultiplier * contracts;
+      const intrinsic = (spot - strike) * contractMultiplier * contracts;
       carry = (netDebit - intrinsic) * frac; // net time value (can be negative)
       denom = Math.max(netDebit, 0);
-      extraCollateral = 0.2 * strike * 100 * contracts; // broker short-put margin, rule of thumb
+      // short-put margin rule of thumb; Deribit short puts are coin-collateralized,
+      // so for crypto this is a rough stand-in rather than the venue's exact formula
+      extraCollateral = 0.2 * strike * contractMultiplier * contracts;
       legDesc = `buy ${contracts.toFixed(2)} call(s) + sell ${contracts.toFixed(2)} put(s), $${strike} strike`;
       out.netDebit = netDebit;
       if (netDebit <= 0) out.warnings.push("This combo currently costs nothing (or pays you) to enter — the headline yield is unbounded, so judge it by the capital-basis number instead.");
+    }
+
+    if (contractMultiplier === 1 && contracts > 0 && contracts < 0.1) {
+      out.warnings.push(`Deribit's minimum trade is 0.1 contracts — this position size only calls for ${contracts.toFixed(2)}.`);
     }
   }
 
