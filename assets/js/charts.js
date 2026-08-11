@@ -77,15 +77,41 @@ export function renderCumulativeChart(el, points) {
   return chart;
 }
 
-// Daily OHLC candles, optional overlay line (e.g. cumulative funding).
-export function renderCandles(el, candles) {
-  const chart = freshChart(el);
+// Exponential moving average of daily closes; SMA-seeded, plotted from the
+// first bar where the window is full.
+export function emaSeries(candles, period) {
+  if (candles.length < period) return [];
+  const k = 2 / (period + 1);
+  let ema = candles.slice(0, period).reduce((a, c) => a + c.c, 0) / period;
+  const out = [{ time: candles[period - 1].t, value: ema }];
+  for (let i = period; i < candles.length; i++) {
+    ema = candles[i].c * k + ema * (1 - k);
+    out.push({ time: candles[i].t, value: ema });
+  }
+  return out;
+}
+
+// Daily OHLC candles plus optional line overlays: { data, color, scale? }.
+// scale "left" gets its own %-formatted axis (used for the funding overlay).
+export function renderCandles(el, candles, overlays = []) {
+  const hasLeft = overlays.some(o => o.scale === "left");
+  const chart = freshChart(el, hasLeft ? { leftPriceScale: { visible: true, borderVisible: false } } : {});
   const series = chart.addCandlestickSeries({
     upColor: COLOR.pos, downColor: COLOR.neg,
     wickUpColor: COLOR.pos, wickDownColor: COLOR.neg,
     borderVisible: false,
   });
   series.setData(candles.map(c => ({ time: c.t, open: c.o, high: c.h, low: c.l, close: c.c })));
+  for (const o of overlays) {
+    const line = chart.addLineSeries({
+      color: o.color, lineWidth: 1.5,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      ...(o.scale === "left"
+        ? { priceScaleId: "left", priceFormat: { type: "custom", formatter: v => v.toFixed(0) + "%" } }
+        : {}),
+    });
+    line.setData(o.data);
+  }
   chart.timeScale().fitContent();
   return chart;
 }

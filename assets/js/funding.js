@@ -39,6 +39,27 @@ export function cumulativeSeries(hist) {
   });
 }
 
+// Daily mean funding APR (%) keyed by UTC date. Daily buckets, not hourly
+// points: this overlays on daily candles, and mixing hourly times into the
+// shared time scale would space the candles out to slivers.
+export function dailyAprSeries(hist) {
+  const D = 24 * 3600e3;
+  const byDay = new Map();
+  hist.t.forEach((t, i) => {
+    const d = Math.floor(t / D);
+    const slot = byDay.get(d) || { sum: 0, n: 0 };
+    slot.sum += hist.r[i];
+    slot.n++;
+    byDay.set(d, slot);
+  });
+  return [...byDay.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([d, { sum, n }]) => ({
+      time: new Date(d * D).toISOString().slice(0, 10),
+      value: (sum / n) * HOURS_PER_YEAR * 100,
+    }));
+}
+
 // Worst funding stretch a short actually lived through: minimum rolling
 // N-day sum of hourly rates, as a decimal. Positive result => never bad.
 // Returns null when the history is shorter than the window.

@@ -1,10 +1,10 @@
 import { getAssetCtxs, getFundingHistory, getRecentFunding } from "./hyperliquid.js";
 import { getMeta, getOhlc, getOptions } from "./baked.js";
 import {
-  fundingWindows, annualizedSeries, cumulativeSeries, worstRolling30d, stabilityStats,
+  fundingWindows, annualizedSeries, cumulativeSeries, dailyAprSeries, worstRolling30d, stabilityStats,
   fmtPct, fmtAprPct, fmtUsd, HOURS_PER_YEAR,
 } from "./funding.js";
-import { renderFundingChart, renderCumulativeChart, renderCandles, clearChart, legend } from "./charts.js";
+import { renderFundingChart, renderCumulativeChart, renderCandles, emaSeries, clearChart, legend } from "./charts.js";
 import { initChain } from "./optionsTable.js";
 import { VARIANTS, defaultStrike, compute } from "./strategy.js";
 import { renderRiskReward } from "./riskpanel.js";
@@ -20,6 +20,7 @@ const state = {
   selected: null,
   sortKey: "nowApr", sortDir: -1,
   calc: { variant: "stock", expiry: null, strike: null, options: null, ohlc: null },
+  overlays: { ema50: false, ema100: false, ema200: false, funding: false },
 };
 
 const aprClass = x => (x === null || x === undefined ? "muted" : x >= 0 ? "num-pos" : "num-neg");
@@ -233,20 +234,17 @@ async function select(coin) {
   $("candles-sub").textContent = row.kind === "crypto"
     ? "Daily candles from Hyperliquid's own candle API (refreshed daily)."
     : "The real stock on the real exchange (Yahoo Finance daily data, refreshed after each US close).";
-  if (ohlc) {
-    renderCandles($("candles-chart"), ohlc.candles);
-    legend($("candles-legend"), [[COLOR.pos, "up day"], [COLOR.neg, "down day"]]);
-  } else {
-    clearChart($("candles-chart"));
-    $("candles-legend").innerHTML = "";
-  }
   state.calc.options = options;
   state.calc.ohlc = ohlc;
+  fundingOverlayChip.disabled = !state.histories.has(coin);
+  drawCandles(row);
   if (options) chain.load(options);
   initCalculator(row, options);
 
   const hist = await histP;
   if (state.selected !== coin) return; // user moved on while we fetched
+  fundingOverlayChip.disabled = !hist;
+  if (hist && state.overlays.funding) drawCandles(row);
 
   if (hist) {
     const w = state.windows.get(coin);
@@ -268,11 +266,11 @@ async function select(coin) {
     const sTile = (lbl, val, sub, cls = "muted") => `
       <div class="tile"><span class="lbl">${lbl}</span>
         <span class="val ${cls}">${val}</span>
-        <span class="sub">${sub}</span></div>`;
+        ${sub ? `<span class="sub">${sub}</span>` : ""}</div>`;
     $("stability-tiles").innerHTML =
-      sTile("Mean APR — 7d", fmtAprPct(s.mean7), "what's happening now", aprClass(s.mean7)) +
-      sTile("Mean APR — 30d", fmtAprPct(s.mean30), "primary judgment window", aprClass(s.mean30)) +
-      sTile("Mean APR — 90d", fmtAprPct(s.mean90), "persistence check", aprClass(s.mean90)) +
+      sTile("Mean APR — 7d", fmtAprPct(s.mean7), "", aprClass(s.mean7)) +
+      sTile("Mean APR — 30d", fmtAprPct(s.mean30), "", aprClass(s.mean30)) +
+      sTile("Mean APR — 90d", fmtAprPct(s.mean90), "", aprClass(s.mean90)) +
       sTile("Mean APR — all history", fmtAprPct(s.meanAll), `${hist.t.length.toLocaleString()} hourly records`, aprClass(s.meanAll)) +
       sTile("Hours positive", s.posShare === null ? "—" : (s.posShare * 100).toFixed(0) + "%",
         "share of hours shorts collected", s.posShare === null ? "muted" : s.posShare >= 0.7 ? "num-pos" : "num-neg") +
@@ -289,6 +287,45 @@ async function select(coin) {
     $("funding-tiles").innerHTML = `<div class="err">Couldn't load funding history right now — the live API may be rate-limiting. Try again in a minute.</div>`;
   }
 }
+
+/* ---------------- candle overlays ---------------- */
+const OVERLAY_STYLE = {
+  ema50: { label: "50 EMA", color: "#D9A441" },
+  ema100: { label: "100 EMA", color: "#5B9BD3" },
+  ema200: { label: "200 EMA", color: "#C9D8D2" },
+  funding: { label: "funding APR (left axis)", color: COLOR.violet },
+};
+
+function drawCandles(row) {
+  const ohlc = state.calc.ohlc;
+  if (!ohlc) {
+    clearChart($("candles-chart"));
+    $("candles-legend").innerHTML = "";
+    return;
+  }
+  const overlays = [];
+  const items = [[COLOR.pos, "up day"], [COLOR.neg, "down day"]];
+  for (const key of ["ema50", "ema100", "ema200"]) {
+    if (!state.overlays[key]) continue;
+    overlays.push({ data: emaSeries(ohlc.candles, parseInt(key.slice(3), 10)), color: OVERLAY_STYLE[key].color });
+    items.push([OVERLAY_STYLE[key].color, OVERLAY_STYLE[key].label]);
+  }
+  const hist = state.histories.get(row.coin);
+  if (state.overlays.funding && hist) {
+    overlays.push({ data: dailyAprSeries(hist), color: OVERLAY_STYLE.funding.color, scale: "left" });
+    items.push([OVERLAY_STYLE.funding.color, OVERLAY_STYLE.funding.label]);
+  }
+  renderCandles($("candles-chart"), ohlc.candles, overlays);
+  legend($("candles-legend"), items);
+}
+
+const fundingOverlayChip = $("candle-overlays").querySelector('[data-ov="funding"]');
+$("candle-overlays").querySelectorAll("[data-ov]").forEach(b => b.addEventListener("click", () => {
+  state.overlays[b.dataset.ov] = !state.overlays[b.dataset.ov];
+  b.setAttribute("aria-pressed", String(state.overlays[b.dataset.ov]));
+  const row = state.rows.find(r => r.coin === state.selected);
+  if (row) drawCandles(row);
+}));
 
 /* ---------------- options chain ---------------- */
 const chain = initChain({
@@ -411,19 +448,23 @@ function recalc(row) {
   if (row.kind === "crypto") calc.legDesc = calc.legDesc.replace("shares", row.sym);
 
   const y = calc.annualized;
-  $("yield-big").textContent = y === null ? "∞" : fmtAprPct(y);
-  $("yield-big").className = "big " + (y === null ? "num-pos" : aprClass(y));
+  $("yield-big").textContent = fmtUsd(calc.net);
+  $("yield-big").className = "big " + aprClass(calc.net);
+  const carryPart = calc.carry >= 0
+    ? `minus ${fmtUsd(calc.carry)} hedge carry and ${fmtUsd(calc.fees)} perp fees`
+    : `plus ${fmtUsd(-calc.carry)} carry credit, minus ${fmtUsd(calc.fees)} perp fees`;
   $("yield-frac").innerHTML =
-    `= <b>${fmtUsd(calc.net)}</b> net funding over ${$("in-days").value} days ÷ <b>${fmtUsd(calc.denom)}</b> to enter the hedge (${calc.legDesc}), annualized`;
+    `= <b>${fmtUsd(calc.grossFunding)}</b> funding at ${$("in-apr").value}% APR on the <b>${fmtUsd(calc.notional)}</b> position over ${$("in-days").value} days, ${carryPart}`;
   $("yield-capital").innerHTML =
-    `Capital basis (adds ${fmtUsd(calc.perpMargin)} perp margin${calc.extraCollateral ? ` + ${fmtUsd(calc.extraCollateral)} put collateral` : ""}): <b class="${aprClass(calc.capitalAnnualized)}">${fmtAprPct(calc.capitalAnnualized)}</b> annualized`;
+    `Yield on hedge cash (÷ ${fmtUsd(calc.denom)} to enter the hedge): <b class="${y === null ? "num-pos" : aprClass(y)}">${y === null ? "∞" : fmtAprPct(y)}</b> annualized · ` +
+    `with ${fmtUsd(calc.perpMargin)} perp margin${calc.extraCollateral ? ` + ${fmtUsd(calc.extraCollateral)} put collateral` : ""}: <b class="${aprClass(calc.capitalAnnualized)}">${fmtAprPct(calc.capitalAnnualized)}</b>`;
 
   $("ledger").innerHTML = `
     <tr><td>Funding collected (${$("in-apr").value}% APR × ${$("in-days").value}d)</td><td class="num-pos">+${fmtUsd(calc.grossFunding)}</td></tr>
     <tr><td class="indent">Hedge carry (option time value used up)</td><td class="${calc.carry > 0 ? "num-neg" : "muted"}">${calc.carry >= 0 ? "−" + fmtUsd(calc.carry) : "+" + fmtUsd(-calc.carry)}</td></tr>
     <tr><td class="indent">Perp fees (enter + exit)</td><td class="num-neg">−${fmtUsd(calc.fees)}</td></tr>
     <tr class="total"><td>Net over the period</td><td class="${aprClass(calc.net)}">${fmtUsd(calc.net)}</td></tr>
-    <tr><td>Cash to enter hedge leg (the denominator)</td><td>${fmtUsd(calc.denom)}</td></tr>`;
+    <tr><td>Cash to enter hedge leg (${calc.legDesc})</td><td>${fmtUsd(calc.denom)}</td></tr>`;
 
   const warn = calc.warnings.length ? `⚠ ${calc.warnings.join(" ")}` : "";
   $("calc-note").textContent = warn;

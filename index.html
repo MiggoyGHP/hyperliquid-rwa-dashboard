@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Funding Harvest — Hyperliquid Tokenized-Stock &amp; Crypto Perp Funding</title>
+<title>Crypto Options Dashboard — Hyperliquid Tokenized-Stock &amp; Crypto Perp Funding</title>
 <meta name="description" content="Live study of funding rates on Hyperliquid's tokenized-stock perps plus BTC, ETH and HYPE, compared with the real asset and its options — and what a hedged funding-harvest trade earns and risks.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🌾</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -15,7 +15,7 @@
 <body>
 
 <header class="wrap site-head">
-  <span class="brand">Funding Harvest</span>
+  <span class="brand">Crypto Options Dashboard</span>
   <span class="badge live" id="live-badge"><span class="dot"></span><span id="live-badge-text">connecting to Hyperliquid…</span></span>
   <span class="badge" id="baked-badge"><span class="dot"></span><span id="baked-badge-text">loading stock data…</span></span>
 </header>
@@ -38,7 +38,7 @@
 
 <section id="market">
   <div class="wrap">
-    <h2>Every market, side by side</h2>
+    <h2>Funding rates</h2>
     <div class="tbl-scroll" style="max-height: 480px; overflow-y: auto;">
       <table id="overview-tbl">
         <thead></thead>
@@ -72,14 +72,18 @@
 
     <div class="chart-card">
       <h3>Funding stability</h3>
-      <p class="sub">Is this rate dependable? Persistent means across windows, few negative hours, shallow worst
-        stretches and low volatility read as stable; a hot 7d mean over a flat 90d mean reads as a spike.</p>
       <div class="tiles" id="stability-tiles" style="margin:0"></div>
     </div>
 
     <div class="chart-card">
       <h3 id="candles-title">Price — daily candles</h3>
       <p class="sub" id="candles-sub">The real stock on the real exchange (Yahoo Finance daily data, refreshed after each US close).</p>
+      <div class="ctl-row" id="candle-overlays" style="margin:10px 0 6px">
+        <button class="chip" data-ov="ema50" aria-pressed="false">50 EMA</button>
+        <button class="chip" data-ov="ema100" aria-pressed="false">100 EMA</button>
+        <button class="chip" data-ov="ema200" aria-pressed="false">200 EMA</button>
+        <button class="chip" data-ov="funding" aria-pressed="false">Funding rate APR</button>
+      </div>
       <div class="chart-box tall" id="candles-chart"></div>
       <div class="chart-legend" id="candles-legend"></div>
     </div>
@@ -104,7 +108,7 @@
 
 <section id="strategy" hidden>
   <div class="wrap">
-    <h2>The harvest calculator</h2>
+    <h2>Yield calculator</h2>
     <div class="calc-grid">
       <div class="panel">
         <h3>Your inputs</h3>
@@ -120,7 +124,7 @@
             <input type="number" id="in-apr" step="0.1">
           </label>
           <label class="ctl">Perp leverage
-            <select id="in-lev"><option>1</option><option selected>2</option><option>3</option><option>5</option></select>
+            <select id="in-lev"><option>1</option><option selected>2</option><option>3</option><option>4</option><option>5</option></select>
           </label>
           <label class="ctl" id="opt-expiry-wrap">Option expiry
             <select id="in-expiry"></select>
@@ -134,7 +138,7 @@
 
       <div>
         <div class="yield-hero">
-          <span class="lbl" style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-3)">Estimated yield on hedge cash</span>
+          <span class="lbl" style="font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-3)">Net funding over the period</span>
           <div class="big" id="yield-big">—</div>
           <div class="frac" id="yield-frac"></div>
           <div class="frac" id="yield-capital"></div>
