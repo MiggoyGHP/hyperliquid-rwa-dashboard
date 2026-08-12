@@ -49,7 +49,7 @@ export function initChain({ selectEl, tableEl, toggleEl, infoEl }) {
       </thead>
       <tbody>${rows}</tbody>`;
     infoEl.textContent = spot
-      ? `Stock at $${fmt(spot)} · shaded cells are in-the-money · line marks the at-the-money strike`
+      ? `${data.symbol ?? "Underlying"} at $${fmt(spot)}${data.source === "deribit-live" ? " · live from Deribit" : ""} · shaded cells are in-the-money · line marks the at-the-money strike`
       : "";
   }
 

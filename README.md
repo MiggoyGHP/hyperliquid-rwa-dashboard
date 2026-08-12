@@ -11,6 +11,7 @@ A live dashboard studying **funding rates on Hyperliquid's tokenized-stock perpe
 | Funding rates, perp prices | Hyperliquid public API, fetched **live in your browser** (CORS-open) | real time |
 | Stock daily candles | Yahoo Finance via `yfinance`, baked to `data/ohlc/*.json` | daily after US close |
 | Options chains (bid/ask, IV, delta, OI, volume) | **Cboe delayed quotes API**, baked to `data/options/*.json` | daily after US close |
+| Crypto options chains (BTC, ETH) | **Deribit public API**, fetched live in your browser (CORS-open, no key) | real time |
 
 Yahoo's free options feed stopped returning bid/ask/open-interest (verified 2026-08),
 so options come from Cboe, which also supplies delta and the other greeks directly.
@@ -42,6 +43,20 @@ python -m http.server 8000                            # then open http://localho
 
 `scripts/tickers.py` is the hand-curated map of xyz coins → Yahoo symbols; coins on the
 DEX but missing from it are reported as `unmappedCoins` in `data/meta.json`.
+
+## API keys
+
+There are none. Every API this site touches (Hyperliquid info, Cboe delayed quotes,
+Yahoo via `yfinance`, Deribit `public/*`) is keyless. In particular the Deribit
+integration uses only public market-data endpoints — a Deribit API key/secret is
+**never needed and must never be added to this repo**: everything under `assets/js/`
+ships to every visitor of the public site, and anything committed stays in git history.
+
+If a future feature needs authenticated Deribit access (positions, balances):
+keep the key in a password manager or Windows Credential Manager; for scripts, read it
+from a `.env` file listed in `.gitignore`; for CI, use a GitHub Actions repository
+secret injected as an environment variable — and never write account data into `data/`
+(it gets published). If a key ever shows up in a diff, rotate it at Deribit immediately.
 
 ## Disclaimer
 
