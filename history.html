@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Historical funding rates — Hyperliquid</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🌾</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+
+<header class="wrap site-head">
+  <span class="brand">Crypto Options Dashboard</span>
+  <a class="nav-link" href="index.html">← Dashboard</a>
+  <span class="badge" id="asof-badge"><span class="dot"></span><span id="asof-text">loading funding data…</span></span>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>historical funding rates</h2>
+    <div class="ctl-row">
+      <label class="ctl">From <input type="datetime-local" id="from"></label>
+      <label class="ctl">To <input type="datetime-local" id="to"></label>
+      <span id="preset-chips">
+        <button class="chip" data-preset="24h" aria-pressed="false">24h</button>
+        <button class="chip" data-preset="7d" aria-pressed="true">7d</button>
+        <button class="chip" data-preset="30d" aria-pressed="false">30d</button>
+        <button class="chip" data-preset="all" aria-pressed="false">All</button>
+      </span>
+      <button class="chip" id="tz-toggle" aria-pressed="true" title="Toggle between UTC and local time">UTC</button>
+    </div>
+    <div class="ctl-row">
+      <span id="cat-chips">
+        <button class="chip" data-cat="all" aria-pressed="true">All</button>
+        <button class="chip" data-cat="stock" aria-pressed="false">Stocks</button>
+        <button class="chip" data-cat="crypto" aria-pressed="false">Crypto</button>
+        <button class="chip" data-cat="commodity" aria-pressed="false">Commodities</button>
+        <button class="chip" data-cat="other" aria-pressed="false">Other</button>
+      </span>
+      <input type="text" id="search" placeholder="filter instrument…">
+    </div>
+    <div class="tbl-scroll" style="max-height: 70vh; overflow-y: auto;">
+      <table id="hist-tbl">
+        <thead></thead>
+        <tbody><tr><td class="loading" colspan="5"><span class="spin"></span>loading funding history…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="ctl-row" style="margin-top: 12px;">
+      <button class="chip" id="prev" disabled>‹ Prev</button>
+      <span class="muted" id="pager-text"></span>
+      <button class="chip" id="next" disabled>Next ›</button>
+    </div>
+    <p class="board-note" id="hist-note" hidden></p>
+  </div>
+</section>
+
+<script type="module" src="assets/js/history.js"></script>
+</body>
+</html>
