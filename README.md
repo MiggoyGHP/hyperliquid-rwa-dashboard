@@ -1,4 +1,4 @@
-# Funding Harvest
+# NDAD — Novel Digital Assets Dashboard
 
 A live dashboard studying **funding rates on Hyperliquid's tokenized-stock perpetuals**
 (the `xyz` builder DEX: `xyz:TSLA`, `xyz:NVDA`, …) against the **real stock** and its
