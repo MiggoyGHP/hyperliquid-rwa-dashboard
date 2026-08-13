@@ -17,6 +17,7 @@ const COLOR = { pos: "#17A67E", neg: "#D9536F", violet: "#8B6FE8" };
 const state = {
   meta: null,
   profiles: null,         // sym -> baked asset profile (data/profiles.json)
+  summary: null,          // coin -> {apr30, days, n} baked 30d means (data/funding/summary.json)
   rows: [],               // joined baked+live ticker rows
   histories: new Map(),   // coin -> { t, r }
   windows: new Map(),     // coin -> fundingWindows result
@@ -29,6 +30,28 @@ const state = {
 
 const aprClass = x => (x === null || x === undefined ? "muted" : x >= 0 ? "num-pos" : "num-neg");
 const nowApr = row => (Number.isFinite(row.ctx?.funding) ? row.ctx.funding * HOURS_PER_YEAR : null);
+
+// Trailing 30d mean APR: prefer a live-computed full window (fresher), else the
+// baked daily summary. null unless a full 30 days of history backs the number.
+function apr30(row) {
+  const w = state.windows.get(row.coin)?.d30;
+  if (w && w.n && !w.partialDays) return w.apr;
+  const s = state.summary?.[row.coin];
+  return s && s.days >= 30 ? s.apr30 : null;
+}
+
+// Hero ranking: 30d averages when available, else this hour's rate so the
+// board never renders empty before summary.json is deployed/baked.
+function heroRank() {
+  const d30 = state.rows.map(r => ({ r, apr: apr30(r) })).filter(x => x.apr !== null);
+  if (d30.length) return { mode: "d30", rows: d30.sort((a, b) => b.apr - a.apr) };
+  return {
+    mode: "now",
+    rows: state.rows.map(r => ({ r, apr: nowApr(r) }))
+      .filter(x => x.apr !== null)
+      .sort((a, b) => b.apr - a.apr),
+  };
+}
 
 /* ---------------- boot ---------------- */
 // The table is live-first: every asset on every dex we poll gets a row,
@@ -61,6 +84,10 @@ async function boot() {
   // best-effort: the About card just stays hidden if profiles are missing
   fetch("data/profiles.json").then(r => r.json())
     .then(p => { state.profiles = p.profiles; if (state.selected) renderAbout(state.rows.find(r => r.coin === state.selected)); })
+    .catch(() => {});
+  // best-effort: hero falls back to this hour's rate if the summary is missing
+  fetch("data/funding/summary.json").then(r => (r.ok ? r.json() : null))
+    .then(s => { if (s) { state.summary = s.coins; renderBoard(); } })
     .catch(() => {});
   try {
     state.meta = await getMeta();
@@ -108,16 +135,20 @@ async function refreshLoop() {
 }
 
 /* ---------------- hero board ---------------- */
+const BOARD_NOTES = {
+  d30: `Ranked by average funding over the last 30 days, annualized (refreshed daily). Only assets with a full 30-day history. Click a ticker to study it below.`,
+  now: `Live from Hyperliquid. "Annualized" = this hour's rate held for a year. Click a ticker to study it below.`,
+};
+
 function renderBoard() {
-  const top = [...state.rows]
-    .filter(r => nowApr(r) !== null)
-    .sort((a, b) => nowApr(b) - nowApr(a))
-    .slice(0, 8);
-  $("board-rows").innerHTML = top.map(r => `
+  const { mode, rows } = heroRank();
+  const top = rows.slice(0, 8);
+  $("board-rows").innerHTML = top.map(({ r, apr }) => `
     <button class="board-row" data-coin="${r.coin}">
       <span><span class="sym">${r.sym}</span>${catTags(r)}<span class="nm">${r.name}</span></span>
-      <span class="apr ${nowApr(r) >= 0 ? "pos" : "neg"}">${fmtAprPct(nowApr(r))}</span>
+      <span class="apr ${apr >= 0 ? "pos" : "neg"}">${fmtAprPct(apr)}</span>
     </button>`).join("");
+  $("board-note").textContent = BOARD_NOTES[mode];
   $("board-rows").querySelectorAll("[data-coin]").forEach(el =>
     el.addEventListener("click", () => select(el.dataset.coin)));
 }
@@ -257,7 +288,7 @@ async function loadFullHistory(coin) {
 }
 
 async function prefetchTopWindows() {
-  const top = [...state.rows].sort((a, b) => (nowApr(b) ?? -9) - (nowApr(a) ?? -9)).slice(0, 10);
+  const top = heroRank().rows.slice(0, 10).map(x => x.r);
   for (const r of top) {
     while (holdPrefetch > 0) await new Promise(res => setTimeout(res, 500));
     await loadWindows(r.coin);

@@ -8,6 +8,9 @@ early records, xyz stocks start 2025-11-13 — never assume hourly spacing.
 Outputs (all under data/funding/):
   index.json          manifest: which dex bundles exist, counts, errors.
                       The frontend iterates this instead of hardcoding dexes.
+  summary.json        per-coin trailing 30d mean funding, annualized:
+                      {"generatedAt", "windowDays", "coins": {coin: {apr30, days, n}}}
+                      The dashboard hero board ranks by this.
   main.json           dex "" (main-dex whitelist coins only)
   <dex>.json          one bundle per builder dex:
                       {"dex", "generatedAt", "coins": {coin: {t, r, p}}}
@@ -45,6 +48,9 @@ DEXES = ["", "xyz", "para", "hyna", "mkts", "km", "flx", "vntl", "cash"]
 PACE_SECONDS = 0.6  # fundingHistory is weight-heavy (browser client uses 1.1s)
 PAGE = 500          # max records per fundingHistory call
 MAX_PAGES = 120     # BTC needs ~56 pages back to May 2023; headroom for growth
+
+HOURS_PER_YEAR = 24 * 365  # match assets/js/funding.js
+WINDOW_DAYS = 30
 
 
 def post(body):
@@ -135,6 +141,31 @@ def bake_dex(dex: str, errors: list):
     return len(live), failed, records
 
 
+def summarize_coins(coins, now_s, out):
+    """Trailing 30d mean funding per coin, annualized like funding.js windowStats."""
+    cutoff = now_s - WINDOW_DAYS * 86400
+    for coin, entry in coins.items():
+        t, r = entry["t"], entry["r"]
+        if not t:
+            continue
+        total = 0.0
+        n = 0
+        prev = None
+        for i in range(len(t) - 1, -1, -1):
+            if t[i] < cutoff:
+                break
+            if t[i] == prev:  # intraday top-up runs can duplicate an hour
+                continue
+            prev = t[i]
+            total += r[i]
+            n += 1
+        if not n:
+            continue
+        full = t[0] <= cutoff + 3600  # 1h slack, same as windowStats partialDays
+        days = WINDOW_DAYS if full else max(1, round((now_s - t[0]) / 86400))
+        out[coin] = {"apr30": round(total / n * HOURS_PER_YEAR, 6), "days": days, "n": n}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dexes", help="comma-separated subset (use 'main' for the main dex)")
@@ -162,9 +193,11 @@ def main():
         total_live += live
         total_failed += failed
 
-    # Manifest covers every bundle on disk, not just this run's subset,
-    # so a --dexes smoke test never hides other dexes from the frontend.
+    # Manifest and summary cover every bundle on disk, not just this run's
+    # subset, so a --dexes smoke test never hides other dexes from the frontend.
     manifest_dexes = []
+    summary_coins = {}
+    now_s = int(time.time())
     for dex in DEXES:
         path = FUNDING_DIR / dex_filename(dex)
         if not path.exists():
@@ -176,11 +209,17 @@ def main():
             "coins": len(bundle["coins"]),
             "records": sum(len(c["t"]) for c in bundle["coins"].values()),
         })
+        summarize_coins(bundle["coins"], now_s, summary_coins)
 
     write_json(FUNDING_DIR / "index.json", {
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "dexes": manifest_dexes,
         "errors": errors,
+    })
+    write_json(FUNDING_DIR / "summary.json", {
+        "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "windowDays": WINDOW_DAYS,
+        "coins": summary_coins,
     })
     log(f"done: {total_live} live coins, {total_failed} failed, {len(manifest_dexes)} bundles")
 
