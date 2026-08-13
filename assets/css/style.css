@@ -66,21 +66,21 @@ a:hover { text-decoration: underline; }
   padding: 22px 0 0;
 }
 .site-head .brand {
-  font-family: var(--font-display);
-  font-weight: 900; font-stretch: 125%;
-  font-size: 18px; letter-spacing: 0.01em; text-transform: uppercase;
-  display: inline-flex; align-items: center; gap: 9px;
+  display: inline-flex; flex-direction: column; gap: 1px;
   align-self: center;
 }
+.brand-row { display: inline-flex; align-items: center; gap: 3px; }
 .brand-logo { flex-shrink: 0; display: block; }
-.brand-sub {
-  font-family: var(--font-mono); font-size: 11px;
-  font-weight: 400; font-stretch: 100%;
-  letter-spacing: 0.02em; text-transform: none;
-  color: var(--ink-2);
-  padding-left: 10px; border-left: 1px solid var(--line-strong);
+.brand-name {
+  font-family: var(--font-display);
+  font-weight: 900; font-stretch: 125%;
+  font-size: 18px; line-height: 1; letter-spacing: 0.04em;
 }
-@media (max-width: 560px) { .brand-sub { display: none; } }
+.brand-sub {
+  font-family: var(--font-mono); font-size: 10px;
+  font-weight: 400; letter-spacing: 0.03em;
+  color: var(--ink-2); white-space: nowrap;
+}
 .nav-link {
   font-family: var(--font-mono); font-size: 12px; color: var(--ink-2);
   text-decoration: none; border-bottom: 1px dashed var(--line-strong);
