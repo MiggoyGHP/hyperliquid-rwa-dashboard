@@ -154,9 +154,11 @@ function renderBoard() {
 }
 
 // Category pill for non-stocks + a muted dex badge for builder-dex perps.
+// The leading spaces are load-bearing: they let a tight cell wrap the tags
+// instead of colliding with whatever sits to the right.
 const catTags = r =>
-  (r.cat !== "stock" ? `<span class="tag tag-${r.cat}">${r.cat}</span>` : "") +
-  (r.dex ? `<span class="tag-dex">${r.dex}</span>` : "");
+  (r.cat !== "stock" ? ` <span class="tag tag-${r.cat}">${r.cat}</span>` : "") +
+  (r.dex ? ` <span class="tag-dex">${r.dex}</span>` : "");
 
 /* ---------------- overview table ---------------- */
 const COLS = [

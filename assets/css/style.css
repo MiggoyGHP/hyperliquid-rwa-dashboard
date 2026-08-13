@@ -129,11 +129,14 @@ a:hover { text-decoration: underline; }
   font: inherit; text-align: left;
 }
 .board-row:hover { background: var(--surface-3); }
+/* label may shrink and wrap its tags; the rate never shrinks or bleeds */
+.board-row > span:first-child { min-width: 0; }
 .board-row .sym { font-weight: 700; font-size: 14px; }
 .board-row .nm { color: var(--ink-3); font-size: 12px; display: block; }
 .board-row .apr {
   font-family: var(--font-mono); font-size: 19px; font-weight: 600;
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0; white-space: nowrap;
 }
 .apr.pos { color: var(--pos); }
 .apr.neg { color: var(--neg); }
