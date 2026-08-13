@@ -12,7 +12,6 @@ const state = {
   inst: [],          // {coin, sym, dex, cat, name, rank, start, end}
   t: null,           // Float64Array, ms epoch, ascending within each instrument slice
   r: null,           // Float64Array, hourly decimal rate
-  p: null,           // Float64Array, premium (NaN = missing)
   instId: null,      // Uint16Array -> index into inst
   scratch: null,     // Uint32Array(N) reused by applyFilter
   idx: null,         // Uint32Array view over scratch: current filtered row set
@@ -21,6 +20,9 @@ const state = {
   sortKey: "time",
   sortDir: -1,
   page: 0,
+  summary: [],       // per-instrument aggregates for the current filter
+  sumSortKey: "mean",
+  sumSortDir: -1,
 };
 
 /* ---------------- loading ---------------- */
@@ -36,11 +38,11 @@ async function loadAll() {
   await metaP;
 
   const failed = [];
-  const slices = []; // [coin, t[], r[], p[]]
+  const slices = []; // [coin, t[], r[]]
   results.forEach((res, i) => {
     if (res.status === "rejected") { failed.push(index.dexes[i].file); return; }
     for (const [coin, s] of Object.entries(res.value.coins)) {
-      if (s.t.length) slices.push([coin, s.t, s.r, s.p]);
+      if (s.t.length) slices.push([coin, s.t, s.r]);
     }
   });
   if (failed.length) {
@@ -53,7 +55,6 @@ async function loadAll() {
   const n = slices.reduce((sum, s) => sum + s[1].length, 0);
   state.t = new Float64Array(n);
   state.r = new Float64Array(n);
-  state.p = new Float64Array(n);
   state.instId = new Uint16Array(n);
   state.scratch = new Uint32Array(n);
 
@@ -61,7 +62,7 @@ async function loadAll() {
   // precomputed rank instead of comparing strings a million times.
   slices.sort((a, b) => a[0].localeCompare(b[0]));
   let off = 0;
-  slices.forEach(([coin, t, r, p], rank) => {
+  slices.forEach(([coin, t, r], rank) => {
     const { dex, sym, cat } = classify(coin);
     state.inst.push({
       coin, sym, dex, cat,
@@ -71,7 +72,6 @@ async function loadAll() {
     for (let i = 0; i < t.length; i++) {
       state.t[off + i] = t[i] * 1000; // baked as epoch seconds
       state.r[off + i] = r[i];
-      state.p[off + i] = p[i] === null ? NaN : p[i]; // Number(null) is 0, not NaN
       state.instId[off + i] = rank;
     }
     off += t.length;
@@ -111,8 +111,34 @@ function applyFilter() {
   state.idx = state.scratch.subarray(0, n);
 }
 
+// Per-instrument aggregates over the filtered range. Walks each instrument's
+// contiguous slice (same bounds as applyFilter) rather than state.idx, whose
+// sort order interleaves instruments.
+function computeSummary() {
+  const { fromMs, toMs } = state.filter;
+  const out = [];
+  for (const inst of state.inst) {
+    if (!instMatches(inst)) continue;
+    const lo = lowerBound(state.t, inst.start, inst.end, fromMs);
+    const hi = lowerBound(state.t, lo, inst.end, toMs + 1);
+    const n = hi - lo;
+    if (!n) continue;
+    let sum = 0;
+    for (let i = lo; i < hi; i++) sum += state.r[i];
+    out.push({
+      inst,
+      latestT: state.t[hi - 1],
+      latestR: state.r[hi - 1],
+      mean: (sum / n) * HOURS_PER_YEAR,
+      total: sum,
+      n,
+    });
+  }
+  state.summary = out;
+}
+
 function sortIdx() {
-  const { t, r, p, instId, inst } = state;
+  const { t, r, instId, inst } = state;
   const dir = state.sortDir;
   let cmp;
   switch (state.sortKey) {
@@ -122,14 +148,6 @@ function sortIdx() {
     case "rate":
     case "apr":
       cmp = (a, b) => (r[a] - r[b]) * dir;
-      break;
-    case "premium": // NaN (missing) sorts last regardless of direction
-      cmp = (a, b) => {
-        const pa = p[a], pb = p[b];
-        if (Number.isNaN(pa)) return Number.isNaN(pb) ? 0 : 1;
-        if (Number.isNaN(pb)) return -1;
-        return (pa - pb) * dir;
-      };
       break;
     default: // time
       cmp = (a, b) => (t[a] - t[b]) * dir;
@@ -142,6 +160,8 @@ function update() {
   $("pager-text").textContent = "sorting…";
   setTimeout(() => {
     applyFilter();
+    computeSummary();
+    renderSummary();
     sortIdx();
     state.page = 0;
     render();
@@ -151,7 +171,6 @@ function update() {
 /* ---------------- formatting ---------------- */
 
 const fmtHourly = r => `${r >= 0 ? "+" : ""}${(r * 100).toFixed(4)}%`;
-const fmtPremium = p => Number.isNaN(p) ? "—" : `${p >= 0 ? "+" : ""}${(p * 100).toFixed(3)}%`;
 const pad = x => String(x).padStart(2, "0");
 
 function fmtTime(ms) {
@@ -175,21 +194,67 @@ function msToInput(ms) {
 /* ---------------- rendering ---------------- */
 
 const COLS = [
-  { key: "time", label: () => `Time (${state.utc ? "UTC" : "local"})` },
-  { key: "inst", label: () => "Instrument" },
+  { key: "time", label: () => `Time (${state.utc ? "UTC" : "local"})`, left: true },
+  { key: "inst", label: () => "Instrument", left: true },
   { key: "rate", label: () => "Hourly funding" },
   { key: "apr", label: () => "Annualized" },
-  { key: "premium", label: () => "Premium" },
 ];
 
 const catTag = inst =>
   (inst.cat !== "stock" ? `<span class="tag tag-${inst.cat}">${inst.cat}</span>` : "") +
   (inst.dex ? `<span class="tag-dex">${inst.dex}</span>` : "");
 
+/* ---------------- per-instrument summary ---------------- */
+
+const SUM_COLS = [
+  { key: "inst", label: "Instrument", left: true },
+  { key: "latest", label: "Latest hourly" },
+  { key: "lapr", label: "Latest annualized" },
+  { key: "mean", label: "Mean APR (range)" },
+  { key: "total", label: "Total collected (range)" },
+];
+
+function renderSummary() {
+  const dir = state.sumSortDir;
+  const key = state.sumSortKey;
+  state.summary.sort((a, b) => {
+    switch (key) {
+      case "inst": return (a.inst.rank - b.inst.rank) * dir;
+      case "latest":
+      case "lapr": return (a.latestR - b.latestR) * dir;
+      case "total": return (a.total - b.total) * dir;
+      default: return (a.mean - b.mean) * dir; // mean
+    }
+  });
+
+  const tbl = $("sum-tbl");
+  tbl.tHead.innerHTML = `<tr>${SUM_COLS.map(c =>
+    `<th class="sortable${c.left ? " left" : ""}" data-key="${c.key}">${c.label} ${key === c.key ? `<span class="arr">${dir < 0 ? "▼" : "▲"}</span>` : ""}</th>`
+  ).join("")}</tr>`;
+  tbl.tHead.querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
+    const k = th.dataset.key;
+    if (state.sumSortKey === k) state.sumSortDir *= -1;
+    else { state.sumSortKey = k; state.sumSortDir = k === "inst" ? 1 : -1; }
+    renderSummary();
+  }));
+
+  const sign = x => x >= 0 ? "num-pos" : "num-neg";
+  tbl.tBodies[0].innerHTML = state.summary.length ? state.summary.map(s => `<tr>
+    <td class="txt left"><b>${s.inst.sym}</b>${catTag(s.inst)}${s.inst.name && s.inst.name !== s.inst.sym ? `<span class="nm">${s.inst.name}</span>` : ""}</td>
+    <td class="${sign(s.latestR)}">${fmtHourly(s.latestR)}</td>
+    <td class="${sign(s.latestR)}">${fmtAprPct(s.latestR * HOURS_PER_YEAR)}</td>
+    <td class="${sign(s.mean)}">${fmtAprPct(s.mean)}</td>
+    <td class="${sign(s.total)}">${fmtAprPct(s.total, 3)}</td>
+  </tr>`).join("")
+    : `<tr><td class="muted left" colspan="5">no instruments in this range</td></tr>`;
+
+  $("sum-count").textContent = `${state.summary.length} instruments`;
+}
+
 function render() {
   const tbl = $("hist-tbl");
   tbl.tHead.innerHTML = `<tr>${COLS.map(c =>
-    `<th class="sortable" data-key="${c.key}">${c.label()} ${state.sortKey === c.key ? `<span class="arr">${state.sortDir < 0 ? "▼" : "▲"}</span>` : ""}</th>`
+    `<th class="sortable${c.left ? " left" : ""}" data-key="${c.key}">${c.label()} ${state.sortKey === c.key ? `<span class="arr">${state.sortDir < 0 ? "▼" : "▲"}</span>` : ""}</th>`
   ).join("")}</tr>`;
   tbl.tHead.querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
     const k = th.dataset.key;
@@ -208,21 +273,59 @@ function render() {
     const r = state.r[i];
     const cls = r >= 0 ? "num-pos" : "num-neg";
     rows.push(`<tr>
-      <td class="muted" style="text-align:left">${fmtTime(state.t[i])}</td>
-      <td class="txt" style="text-align:left"><b>${inst.sym}</b>${catTag(inst)}${inst.name && inst.name !== inst.sym ? `<span class="nm">${inst.name}</span>` : ""}</td>
+      <td class="muted left">${fmtTime(state.t[i])}</td>
+      <td class="txt left"><b>${inst.sym}</b>${catTag(inst)}${inst.name && inst.name !== inst.sym ? `<span class="nm">${inst.name}</span>` : ""}</td>
       <td class="${cls}">${fmtHourly(r)}</td>
       <td class="${cls}">${fmtAprPct(r * HOURS_PER_YEAR)}</td>
-      <td class="muted">${fmtPremium(state.p[i])}</td>
     </tr>`);
   }
   tbl.tBodies[0].innerHTML = rows.length ? rows.join("")
-    : `<tr><td class="muted" colspan="5" style="text-align:left">no rows in this range</td></tr>`;
+    : `<tr><td class="muted left" colspan="4">no rows in this range</td></tr>`;
 
   $("pager-text").textContent = n
     ? `rows ${(startRow + 1).toLocaleString()}–${Math.min(startRow + PER_PAGE, n).toLocaleString()} of ${n.toLocaleString()}`
     : "0 rows";
   $("prev").disabled = state.page === 0;
   $("next").disabled = startRow + PER_PAGE >= n;
+}
+
+/* ---------------- CSV export ---------------- */
+
+// Exports the filtered set (all pages, current sort order). Built in chunks
+// with a yield between each so an "All"-preset export (~500k rows) doesn't
+// freeze the tab; Blob accepts the parts array without one giant join.
+async function exportCsv() {
+  const btn = $("csv-btn");
+  btn.disabled = true;
+  const oldLabel = btn.textContent;
+  try {
+    const idx = state.idx;
+    const parts = ["time_utc,instrument,dex,category,hourly_rate,annualized_rate\n"];
+    const CHUNK = 50000;
+    for (let start = 0; start < idx.length; start += CHUNK) {
+      const end = Math.min(start + CHUNK, idx.length);
+      const rows = [];
+      for (let k = start; k < end; k++) {
+        const i = idx[k];
+        const inst = state.inst[state.instId[i]];
+        const r = state.r[i];
+        rows.push(`${new Date(state.t[i]).toISOString()},${inst.sym},${inst.dex || "main"},${inst.cat},${r},${r * HOURS_PER_YEAR}`);
+      }
+      parts.push(rows.join("\n") + "\n");
+      btn.textContent = `preparing… ${Math.round(end / idx.length * 100)}%`;
+      await new Promise(res => setTimeout(res, 0));
+    }
+    const day = ms => new Date(ms).toISOString().slice(0, 10);
+    const url = URL.createObjectURL(new Blob(parts, { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `funding-history_${day(state.filter.fromMs)}_${day(state.filter.toMs)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldLabel;
+  }
 }
 
 /* ---------------- controls ---------------- */
@@ -289,6 +392,8 @@ function wireControls() {
     }, 200);
   });
 
+  $("csv-btn").addEventListener("click", exportCsv);
+
   $("prev").addEventListener("click", () => { if (state.page > 0) { state.page--; render(); } });
   $("next").addEventListener("click", () => {
     if ((state.page + 1) * PER_PAGE < state.idx.length) { state.page++; render(); }
@@ -304,12 +409,14 @@ async function boot() {
     console.error(e);
     $("asof-text").textContent = "failed to load funding data";
     $("hist-tbl").tBodies[0].innerHTML =
-      `<tr><td class="muted" colspan="5" style="text-align:left">Could not load data/funding/ — run scripts/refresh_funding.py and redeploy.</td></tr>`;
+      `<tr><td class="muted left" colspan="4">Could not load data/funding/ — run scripts/refresh_funding.py and redeploy.</td></tr>`;
     return;
   }
   wireControls();
   applyPreset("7d"); // matches the chip pre-pressed in history.html
   applyFilter();
+  computeSummary();
+  renderSummary();
   sortIdx();
   render();
 }

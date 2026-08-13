@@ -321,13 +321,17 @@ async function select(coin) {
     const tile = (lbl, wnd, note) => `
       <div class="tile"><span class="lbl">${lbl}</span>
         <span class="val ${aprClass(wnd.apr)}">${fmtAprPct(wnd.apr)}</span>
-        <span class="sub">${note ?? `${fmtAprPct(wnd.sum, 3)} over the window`}</span></div>`;
+        <span class="sub">${wnd.partialDays != null
+          ? `only ${wnd.partialDays}d of data · ${fmtAprPct(wnd.sum, 3)} over window`
+          : note ?? `${fmtAprPct(wnd.sum, 3)} over the window`}</span></div>`;
     $("funding-tiles").innerHTML =
       tile("Latest hour", w.h1, "annualized") +
       tile("Last 8 hours", w.h8) +
       tile("Last 24 hours", w.h24) +
       tile("Last 7 days", w.d7) +
       tile("Last 30 days", w.d30) +
+      tile("Last 60 days", w.d60) +
+      tile("Last 90 days", w.d90) +
       `<div class="tile"><span class="lbl">Since ${hist.t.length ? new Date(hist.t[0]).toISOString().slice(0, 10) : "listing"}</span>
         <span class="val ${aprClass(w.all.sum)}">${fmtAprPct(w.all.sum, 1)}</span>
         <span class="sub">total collected · ${fmtAprPct(w.all.apr)} annualized</span></div>`;
@@ -337,10 +341,12 @@ async function select(coin) {
       <div class="tile"><span class="lbl">${lbl}</span>
         <span class="val ${cls}">${val}</span>
         ${sub ? `<span class="sub">${sub}</span>` : ""}</div>`;
+    const cov = p => p != null ? `only ${p}d of data` : "";
     $("stability-tiles").innerHTML =
-      sTile("Mean APR — 7d", fmtAprPct(s.mean7), "", aprClass(s.mean7)) +
-      sTile("Mean APR — 30d", fmtAprPct(s.mean30), "", aprClass(s.mean30)) +
-      sTile("Mean APR — 90d", fmtAprPct(s.mean90), "", aprClass(s.mean90)) +
+      sTile("Mean APR — 7d", fmtAprPct(s.mean7), cov(s.part7), aprClass(s.mean7)) +
+      sTile("Mean APR — 30d", fmtAprPct(s.mean30), cov(s.part30), aprClass(s.mean30)) +
+      sTile("Mean APR — 60d", fmtAprPct(s.mean60), cov(s.part60), aprClass(s.mean60)) +
+      sTile("Mean APR — 90d", fmtAprPct(s.mean90), cov(s.part90), aprClass(s.mean90)) +
       sTile("Mean APR — all history", fmtAprPct(s.meanAll), `${hist.t.length.toLocaleString()} hourly records`, aprClass(s.meanAll)) +
       sTile("Hours positive", s.posShare === null ? "—" : (s.posShare * 100).toFixed(0) + "%",
         "share of hours shorts collected", s.posShare === null ? "muted" : s.posShare >= 0.7 ? "num-pos" : "num-neg") +

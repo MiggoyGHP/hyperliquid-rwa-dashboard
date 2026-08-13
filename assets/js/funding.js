@@ -4,13 +4,18 @@ export const HOURS_PER_YEAR = 24 * 365;
 
 // Simple sum of hourly rates in [since, now] as a decimal (compounding is
 // negligible at funding magnitudes; stated in the methodology).
-function windowStats(hist, sinceMs) {
+// partialDays: days of data actually available when history starts after the
+// window does (so the mean can be flagged as partial), else null. The 1-hour
+// slack keeps an asset exactly N days old from being flagged.
+function windowStats(hist, sinceMs, nowMs = Date.now()) {
   let sum = 0, n = 0;
   for (let i = hist.t.length - 1; i >= 0 && hist.t[i] >= sinceMs; i--) {
     sum += hist.r[i];
     n++;
   }
-  return { sum, n, apr: n ? (sum / n) * HOURS_PER_YEAR : null };
+  const partialDays = hist.t.length && sinceMs > 0 && hist.t[0] > sinceMs + 3600e3
+    ? Math.max(1, Math.round((nowMs - hist.t[0]) / 864e5)) : null;
+  return { sum, n, apr: n ? (sum / n) * HOURS_PER_YEAR : null, partialDays };
 }
 
 export function fundingWindows(hist, nowMs = Date.now()) {
@@ -18,11 +23,13 @@ export function fundingWindows(hist, nowMs = Date.now()) {
   const latest = hist.r.length ? hist.r[hist.r.length - 1] : null;
   return {
     h1: { sum: latest ?? 0, n: latest === null ? 0 : 1, apr: latest === null ? null : latest * HOURS_PER_YEAR },
-    h8: windowStats(hist, nowMs - 8 * H),
-    h24: windowStats(hist, nowMs - 24 * H),
-    d7: windowStats(hist, nowMs - 7 * 24 * H),
-    d30: windowStats(hist, nowMs - 30 * 24 * H),
-    all: windowStats(hist, 0),
+    h8: windowStats(hist, nowMs - 8 * H, nowMs),
+    h24: windowStats(hist, nowMs - 24 * H, nowMs),
+    d7: windowStats(hist, nowMs - 7 * 24 * H, nowMs),
+    d30: windowStats(hist, nowMs - 30 * 24 * H, nowMs),
+    d60: windowStats(hist, nowMs - 60 * 24 * H, nowMs),
+    d90: windowStats(hist, nowMs - 90 * 24 * H, nowMs),
+    all: windowStats(hist, 0, nowMs),
   };
 }
 
@@ -82,7 +89,8 @@ export const worstRolling30d = hist => worstRolling(hist, 30);
 // is the day-to-day take. All rates are decimals in APR units except posShare.
 export function stabilityStats(hist, nowMs = Date.now()) {
   const D = 24 * 3600e3;
-  const mean = days => windowStats(hist, nowMs - days * D).apr;
+  const w = days => windowStats(hist, nowMs - days * D, nowMs);
+  const w7 = w(7), w30 = w(30), w60 = w(60), w90 = w(90);
   const n = hist.r.length;
   const posShare = n ? hist.r.filter(r => r > 0).length / n : null;
 
@@ -100,8 +108,9 @@ export function stabilityStats(hist, nowMs = Date.now()) {
   }
 
   return {
-    mean7: mean(7), mean30: mean(30), mean90: mean(90),
-    meanAll: windowStats(hist, 0).apr,
+    mean7: w7.apr, mean30: w30.apr, mean60: w60.apr, mean90: w90.apr,
+    part7: w7.partialDays, part30: w30.partialDays, part60: w60.partialDays, part90: w90.partialDays,
+    meanAll: windowStats(hist, 0, nowMs).apr,
     posShare,
     worst7: worstRolling(hist, 7),
     worst30: worstRolling(hist, 30),

@@ -41,11 +41,18 @@
         <button class="chip" data-cat="other" aria-pressed="false">Other</button>
       </span>
       <input type="text" id="search" placeholder="filter instrument…">
+      <button class="chip" id="csv-btn" title="Download the filtered rows as CSV">Download CSV</button>
     </div>
+    <details id="sum-wrap" open>
+      <summary>Per-instrument summary · <span id="sum-count"></span></summary>
+      <div class="tbl-scroll" style="max-height: 40vh; overflow-y: auto; margin-bottom: 12px;">
+        <table id="sum-tbl"><thead></thead><tbody></tbody></table>
+      </div>
+    </details>
     <div class="tbl-scroll" style="max-height: 70vh; overflow-y: auto;">
       <table id="hist-tbl">
         <thead></thead>
-        <tbody><tr><td class="loading" colspan="5"><span class="spin"></span>loading funding history…</td></tr></tbody>
+        <tbody><tr><td class="loading" colspan="4"><span class="spin"></span>loading funding history…</td></tr></tbody>
       </table>
     </div>
     <div class="ctl-row" style="margin-top: 12px;">
