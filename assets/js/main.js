@@ -16,6 +16,7 @@ const COLOR = { pos: "#17A67E", neg: "#D9536F", violet: "#8B6FE8" };
 
 const state = {
   meta: null,
+  profiles: null,         // sym -> baked asset profile (data/profiles.json)
   rows: [],               // joined baked+live ticker rows
   histories: new Map(),   // coin -> { t, r }
   windows: new Map(),     // coin -> fundingWindows result
@@ -57,6 +58,10 @@ function buildRows(ctxs) {
 }
 
 async function boot() {
+  // best-effort: the About card just stays hidden if profiles are missing
+  fetch("data/profiles.json").then(r => r.json())
+    .then(p => { state.profiles = p.profiles; if (state.selected) renderAbout(state.rows.find(r => r.coin === state.selected)); })
+    .catch(() => {});
   try {
     state.meta = await getMeta();
     // First dexes to answer render immediately; the rest stream in.
@@ -260,6 +265,31 @@ async function prefetchTopWindows() {
 }
 
 /* ---------------- ticker detail ---------------- */
+
+// $3.21T / $45.2B / $850M — market caps don't need more precision than this.
+function fmtBigUsd(x) {
+  const a = Math.abs(x);
+  if (a >= 1e12) return `$${(x / 1e12).toFixed(2)}T`;
+  if (a >= 1e9) return `$${(x / 1e9).toFixed(1)}B`;
+  if (a >= 1e6) return `$${(x / 1e6).toFixed(0)}M`;
+  return fmtUsd(x);
+}
+
+// About card: baked profile (description + market cap / sector / network) for
+// the selected asset, keyed by symbol so multi-dex listings share one entry.
+function renderAbout(row) {
+  const p = row && state.profiles?.[row.sym];
+  $("about-card").hidden = !p;
+  if (!p) return;
+  $("about-desc").textContent = p.desc;
+  const fact = (lbl, val) => `<span class="fact"><span class="k">${lbl}</span>${val}</span>`;
+  $("about-facts").innerHTML =
+    (p.mcap ? fact(p.mcapKind === "aum" ? "Fund assets" : "Market cap", fmtBigUsd(p.mcap)) : "") +
+    (p.sector ? fact("Sector", p.sector) : "") +
+    (p.industry ? fact("Industry", p.industry) : "") +
+    (p.network ? fact("Network", p.network) : "");
+}
+
 async function select(coin) {
   const row = state.rows.find(r => r.coin === coin);
   if (!row) return;
@@ -268,7 +298,7 @@ async function select(coin) {
   // view: no candles, options chain or calculator — those need Yahoo/Cboe data.
   $("detail").hidden = false;
   $("options").hidden = !row.baked || !row.hasOptions;
-  $("strategy").hidden = !row.baked;
+  $("strategy").hidden = true; // yield calculator hidden pending rework — was: !row.baked
   $("candles-card").hidden = !row.baked;
   $("detail-title").textContent = `${row.name} (${row.sym})`;
   $("detail-sub").innerHTML = !row.baked
@@ -277,6 +307,7 @@ async function select(coin) {
     ? `Perp <b>${row.coin}</b> on Hyperliquid (main dex). Crypto asset — hedge by holding spot ${row.sym} on any exchange.`
     : `Perp <b>${row.coin}</b> on Hyperliquid vs ${row.sym} on the stock exchange.` +
       (row.hasOptions ? "" : " <b>No listed options for this name</b> — hedge with the real stock only.");
+  renderAbout(row);
   $("detail").scrollIntoView({ behavior: "smooth" });
   renderOverview();
 

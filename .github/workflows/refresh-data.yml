@@ -25,6 +25,8 @@ jobs:
       - run: python scripts/refresh_data.py
       - run: python scripts/refresh_funding.py
         if: ${{ !cancelled() }}
+      - run: python scripts/refresh_profiles.py
+        if: ${{ !cancelled() }}
       - name: Commit refreshed data
         if: ${{ !cancelled() }}
         run: |
