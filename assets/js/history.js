@@ -1,12 +1,22 @@
 // Historical funding rates page: renders data/funding/* baked by
-// scripts/refresh_funding.py. No live API calls and no localStorage — the
-// dataset (~1M rows, ~30 MB) dwarfs the ~5 MB quota, so it lives in memory
-// as parallel typed arrays and only the visible page hits the DOM.
-import { HOURS_PER_YEAR, fmtAprPct } from "./funding.js";
+// scripts/refresh_funding.py. No live API calls. The dataset (~1M rows,
+// ~30 MB) dwarfs the ~5 MB localStorage quota, so it lives in memory as
+// parallel typed arrays and only the visible page hits the DOM. localStorage
+// holds only two small preferences: the summary watchlist and the tz choice.
+import { HOURS_PER_YEAR, fmtAprPct, fmtPct } from "./funding.js";
 import { classify, DISPLAY_NAMES } from "./classify.js";
 
 const $ = id => document.getElementById(id);
 const PER_PAGE = 500;
+
+const WATCH_KEY = "ndad.hist.watchlist";
+const TZ_KEY = "ndad.tz"; // "utc" | "local" — also read by the dashboard clock
+
+function loadWatch() {
+  try { return new Set(JSON.parse(localStorage.getItem(WATCH_KEY)) || []); }
+  catch { return new Set(); }
+}
+function saveWatch() { localStorage.setItem(WATCH_KEY, JSON.stringify([...state.watch])); }
 
 const state = {
   inst: [],          // {coin, sym, dex, cat, name, rank, start, end}
@@ -16,12 +26,16 @@ const state = {
   scratch: null,     // Uint32Array(N) reused by applyFilter
   idx: null,         // Uint32Array view over scratch: current filtered row set
   filter: { fromMs: 0, toMs: 0, cat: "all", q: "" },
-  utc: true,
+  utc: localStorage.getItem(TZ_KEY) === "utc", // local time by default
+  bakedMs: 0,        // index.json generatedAt, for the header badge
   sortKey: "time",
   sortDir: -1,
   page: 0,
-  summary: [],       // per-instrument aggregates for the current filter
-  sumSortKey: "mean",
+  // The watchlist scopes the per-instrument summary and the CSV export ONLY.
+  // The category chips + text filter scope the main hourly table ONLY.
+  watch: new Set(),  // coin keys ("ETH", "xyz:NVDA") picked for the summary
+  summary: [],       // per-instrument aggregates for watched coins in range
+  sumSortKey: "apr",
   sumSortDir: -1,
 };
 
@@ -77,7 +91,8 @@ async function loadAll() {
     off += t.length;
   });
 
-  $("asof-text").textContent = `funding baked ${index.generatedAt.slice(0, 16).replace("T", " ")} UTC`;
+  state.bakedMs = Date.parse(index.generatedAt);
+  renderBakedBadge();
 }
 
 /* ---------------- filter / sort ---------------- */
@@ -111,28 +126,24 @@ function applyFilter() {
   state.idx = state.scratch.subarray(0, n);
 }
 
-// Per-instrument aggregates over the filtered range. Walks each instrument's
-// contiguous slice (same bounds as applyFilter) rather than state.idx, whose
-// sort order interleaves instruments.
+// Per-instrument aggregates over the watchlist for the current range. Walks
+// each instrument's contiguous slice (same bounds as applyFilter) rather than
+// state.idx, whose sort order interleaves instruments. Independent of the
+// table's category/text filters.
 function computeSummary() {
   const { fromMs, toMs } = state.filter;
   const out = [];
-  for (const inst of state.inst) {
-    if (!instMatches(inst)) continue;
-    const lo = lowerBound(state.t, inst.start, inst.end, fromMs);
-    const hi = lowerBound(state.t, lo, inst.end, toMs + 1);
-    const n = hi - lo;
-    if (!n) continue;
-    let sum = 0;
-    for (let i = lo; i < hi; i++) sum += state.r[i];
-    out.push({
-      inst,
-      latestT: state.t[hi - 1],
-      latestR: state.r[hi - 1],
-      mean: (sum / n) * HOURS_PER_YEAR,
-      total: sum,
-      n,
-    });
+  if (state.watch.size) {
+    for (const inst of state.inst) {
+      if (!state.watch.has(inst.coin)) continue;
+      const lo = lowerBound(state.t, inst.start, inst.end, fromMs);
+      const hi = lowerBound(state.t, lo, inst.end, toMs + 1);
+      const n = hi - lo;
+      if (!n) continue;
+      let sum = 0;
+      for (let i = lo; i < hi; i++) sum += state.r[i];
+      out.push({ inst, total: sum, n, apr: (sum / n) * HOURS_PER_YEAR });
+    }
   }
   state.summary = out;
 }
@@ -179,6 +190,19 @@ function fmtTime(ms) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// e.g. "UTC+08:00" for the viewer's zone.
+function utcOffsetStr() {
+  const m = -new Date().getTimezoneOffset();
+  const a = Math.abs(m);
+  return `UTC${m < 0 ? "-" : "+"}${pad(Math.floor(a / 60))}:${pad(a % 60)}`;
+}
+
+function renderBakedBadge() {
+  if (!state.bakedMs) return;
+  $("asof-text").textContent =
+    `funding baked ${fmtTime(state.bakedMs)} ${state.utc ? "UTC" : utcOffsetStr()}`;
+}
+
 // datetime-local inputs are timezone-naive; interpret them in the active zone.
 function inputToMs(v) {
   if (!v) return null;
@@ -208,10 +232,11 @@ const catTag = inst =>
 
 const SUM_COLS = [
   { key: "inst", label: "Instrument", left: true },
-  { key: "latest", label: "Latest hourly" },
-  { key: "lapr", label: "Latest annualized" },
-  { key: "mean", label: "Mean APR (range)" },
-  { key: "total", label: "Total collected (range)" },
+  { key: "total", label: "Funding received (range)", title: "Raw sum of hourly rates over the range — not annualized" },
+  { key: "n", label: "Periods (hrs)", title: "Record count. Hourly since the hourly-funding switch; early main-dex history is 8-hour periods." },
+  { key: "apr", label: "Annualized", title: "Range funding scaled to a year: total × 8760 / periods" },
+  // future: { key: "usd", label: "Accrued (USDC)" } once wallet position sizes exist;
+  // computeSummary rows just need a matching field.
 ];
 
 function renderSummary() {
@@ -220,16 +245,15 @@ function renderSummary() {
   state.summary.sort((a, b) => {
     switch (key) {
       case "inst": return (a.inst.rank - b.inst.rank) * dir;
-      case "latest":
-      case "lapr": return (a.latestR - b.latestR) * dir;
       case "total": return (a.total - b.total) * dir;
-      default: return (a.mean - b.mean) * dir; // mean
+      case "n": return (a.n - b.n) * dir;
+      default: return (a.apr - b.apr) * dir; // apr
     }
   });
 
   const tbl = $("sum-tbl");
   tbl.tHead.innerHTML = `<tr>${SUM_COLS.map(c =>
-    `<th class="sortable${c.left ? " left" : ""}" data-key="${c.key}">${c.label} ${key === c.key ? `<span class="arr">${dir < 0 ? "▼" : "▲"}</span>` : ""}</th>`
+    `<th class="sortable${c.left ? " left" : ""}" data-key="${c.key}"${c.title ? ` title="${c.title}"` : ""}>${c.label} ${key === c.key ? `<span class="arr">${dir < 0 ? "▼" : "▲"}</span>` : ""}</th>`
   ).join("")}</tr>`;
   tbl.tHead.querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
     const k = th.dataset.key;
@@ -241,14 +265,227 @@ function renderSummary() {
   const sign = x => x >= 0 ? "num-pos" : "num-neg";
   tbl.tBodies[0].innerHTML = state.summary.length ? state.summary.map(s => `<tr>
     <td class="txt left"><b>${s.inst.sym}</b>${catTag(s.inst)}${s.inst.name && s.inst.name !== s.inst.sym ? `<span class="nm">${s.inst.name}</span>` : ""}</td>
-    <td class="${sign(s.latestR)}">${fmtHourly(s.latestR)}</td>
-    <td class="${sign(s.latestR)}">${fmtAprPct(s.latestR * HOURS_PER_YEAR)}</td>
-    <td class="${sign(s.mean)}">${fmtAprPct(s.mean)}</td>
-    <td class="${sign(s.total)}">${fmtAprPct(s.total, 3)}</td>
+    <td class="${sign(s.total)}">${fmtPct(s.total, 3)}</td>
+    <td class="muted">${s.n.toLocaleString()}</td>
+    <td class="${sign(s.apr)}">${fmtAprPct(s.apr)}</td>
   </tr>`).join("")
-    : `<tr><td class="muted left" colspan="5">no instruments in this range</td></tr>`;
+    : `<tr><td class="muted left" colspan="4">${state.watch.size
+      ? "no records in this range for the selected instruments"
+      : "use the search box above to add instruments to the summary"}</td></tr>`;
 
-  $("sum-count").textContent = `${state.summary.length} instruments`;
+  $("sum-count").textContent = `${state.watch.size} selected`;
+}
+
+/* ---------------- watchlist picker ---------------- */
+
+function renderWatchMenu() {
+  const menu = $("watch-menu");
+  const q = $("watch-search").value.trim().toLowerCase();
+  if (!q) { menu.hidden = true; return; }
+  const hits = state.inst.filter(inst => !state.watch.has(inst.coin)
+    && (inst.sym.toLowerCase().includes(q)
+      || inst.name.toLowerCase().includes(q)
+      || inst.coin.toLowerCase().includes(q))).slice(0, 20);
+  if (!hits.length) { menu.hidden = true; return; }
+  menu.innerHTML = hits.map(inst =>
+    `<button type="button" data-coin="${inst.coin}"><b>${inst.sym}</b>${catTag(inst)}${inst.name && inst.name !== inst.sym ? `<span class="nm">${inst.name}</span>` : ""}</button>`
+  ).join("");
+  menu.hidden = false;
+}
+
+function renderWatchChips() {
+  $("watch-chips").innerHTML = [...state.watch].sort().map(coin => {
+    const inst = state.inst.find(i => i.coin === coin);
+    return `<button class="chip" aria-pressed="true" data-coin="${coin}" title="Remove from summary">` +
+      `${inst ? inst.sym : coin}${inst && inst.dex ? `<span class="tag-dex">${inst.dex}</span>` : ""} ×</button>`;
+  }).join("");
+}
+
+function updateCsvBtn() {
+  const btn = $("csv-btn");
+  btn.disabled = state.watch.size === 0;
+  btn.title = btn.disabled
+    ? "Add instruments to the summary watchlist first"
+    : "Download watchlist rows + summary as CSV";
+}
+
+// Watchlist edits leave the main table alone — only the summary re-renders.
+function watchChanged() {
+  saveWatch();
+  renderWatchChips();
+  computeSummary();
+  renderSummary();
+  updateCsvBtn();
+}
+
+/* ---------------- CSV export ---------------- */
+
+// Exports the watchlist over the selected range in the active timezone:
+// a per-instrument summary block, a blank line, then hourly rows grouped by
+// instrument ascending in time (independent of the table's filters/sort).
+// Built in chunks with a yield between each so a full-history export doesn't
+// freeze the tab; Blob accepts the parts array without one giant join.
+async function exportCsv() {
+  const btn = $("csv-btn");
+  if (!state.watch.size) return;
+  btn.disabled = true;
+  const oldLabel = btn.textContent;
+  try {
+    const { fromMs, toMs } = state.filter;
+    const tz = state.utc ? "UTC" : `local (${utcOffsetStr()})`;
+    const parts = [
+      `# NDAD funding summary,from=${fmtTime(fromMs)},to=${fmtTime(toMs)},tz=${tz}\n`,
+      "instrument,dex,category,periods,funding_range,annualized\n",
+    ];
+    for (const s of state.summary) {
+      parts.push(`${s.inst.sym},${s.inst.dex || "main"},${s.inst.cat},${s.n},${s.total},${s.apr}\n`);
+    }
+    parts.push("\n# hourly records\n");
+    parts.push(`${state.utc ? "time_utc" : "time_local"},instrument,dex,category,hourly_rate,annualized_rate\n`);
+
+    const idx = [];
+    for (const inst of state.inst) {
+      if (!state.watch.has(inst.coin)) continue;
+      const lo = lowerBound(state.t, inst.start, inst.end, fromMs);
+      const hi = lowerBound(state.t, lo, inst.end, toMs + 1);
+      for (let i = lo; i < hi; i++) idx.push(i);
+    }
+    const csvTime = ms => state.utc ? new Date(ms).toISOString() : fmtTime(ms);
+    const CHUNK = 50000;
+    for (let start = 0; start < idx.length; start += CHUNK) {
+      const end = Math.min(start + CHUNK, idx.length);
+      const rows = [];
+      for (let k = start; k < end; k++) {
+        const i = idx[k];
+        const inst = state.inst[state.instId[i]];
+        const r = state.r[i];
+        rows.push(`${csvTime(state.t[i])},${inst.sym},${inst.dex || "main"},${inst.cat},${r},${r * HOURS_PER_YEAR}`);
+      }
+      parts.push(rows.join("\n") + "\n");
+      btn.textContent = `preparing… ${Math.round(end / idx.length * 100)}%`;
+      await new Promise(res => setTimeout(res, 0));
+    }
+    const day = ms => msToInput(ms).slice(0, 10); // day in the active zone
+    const url = URL.createObjectURL(new Blob(parts, { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `funding-watchlist_${day(fromMs)}_${day(toMs)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } finally {
+    btn.textContent = oldLabel;
+    updateCsvBtn();
+  }
+}
+
+/* ---------------- controls ---------------- */
+
+function setPressed(container, pressedEl) {
+  container.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", String(c === pressedEl)));
+}
+
+function applyPreset(preset) {
+  // Funding pays on the hour; align to the top of the next hour (ceil so a
+  // just-baked record for the current hour is never excluded).
+  const now = Math.ceil(Date.now() / 3600e3) * 3600e3;
+  const spans = { "24h": 864e5, "7d": 7 * 864e5, "30d": 30 * 864e5 };
+  state.filter.toMs = now;
+  state.filter.fromMs = preset === "all"
+    ? state.t.reduce((min, v) => Math.min(min, v), Infinity)
+    : now - spans[preset];
+  $("from").value = msToInput(state.filter.fromMs);
+  $("to").value = msToInput(state.filter.toMs);
+}
+
+function wireControls() {
+  $("preset-chips").querySelectorAll(".chip").forEach(chip =>
+    chip.addEventListener("click", () => {
+      setPressed($("preset-chips"), chip);
+      applyPreset(chip.dataset.preset);
+      update();
+    }));
+
+  const onDateEdit = () => {
+    // Minutes are noise — funding is hourly on the hour. Snap at the string
+    // level (zone-correct even for :30-offset zones) and write it back so the
+    // input displays what the filter uses.
+    const snap = el => { if (el.value) el.value = el.value.slice(0, 14) + "00"; };
+    snap($("from"));
+    snap($("to"));
+    const from = inputToMs($("from").value);
+    const to = inputToMs($("to").value);
+    if (from === null || to === null) return;
+    state.filter.fromMs = from;
+    state.filter.toMs = to;
+    setPressed($("preset-chips"), null); // custom range: no preset active
+    update();
+  };
+  $("from").addEventListener("change", onDateEdit);
+  $("to").addEventListener("change", onDateEdit);
+
+  $("tz-toggle").addEventListener("click", () => {
+    state.utc = !state.utc;
+    localStorage.setItem(TZ_KEY, state.utc ? "utc" : "local");
+    const btn = $("tz-toggle");
+    btn.textContent = state.utc ? "UTC" : "local";
+    btn.setAttribute("aria-pressed", String(state.utc));
+    // same instants, re-expressed in the new zone
+    $("from").value = msToInput(state.filter.fromMs);
+    $("to").value = msToInput(state.filter.toMs);
+    renderBakedBadge();
+    render();
+  });
+
+  $("cat-chips").querySelectorAll(".chip").forEach(chip =>
+    chip.addEventListener("click", () => {
+      setPressed($("cat-chips"), chip);
+      state.filter.cat = chip.dataset.cat;
+      update();
+    }));
+
+  let debounce;
+  $("search").addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => {
+      state.filter.q = $("search").value.trim().toLowerCase();
+      update();
+    }, 200);
+  });
+
+  let watchDebounce;
+  $("watch-search").addEventListener("input", () => {
+    clearTimeout(watchDebounce);
+    watchDebounce = setTimeout(renderWatchMenu, 200);
+  });
+  $("watch-search").addEventListener("keydown", e => {
+    if (e.key === "Escape") $("watch-menu").hidden = true;
+  });
+  $("watch-search").addEventListener("blur", () =>
+    setTimeout(() => { $("watch-menu").hidden = true; }, 150));
+  // pointerdown fires before the input's blur, so the pick always lands
+  $("watch-menu").addEventListener("pointerdown", e => {
+    const b = e.target.closest("button[data-coin]");
+    if (!b) return;
+    e.preventDefault();
+    state.watch.add(b.dataset.coin);
+    watchChanged();
+    $("watch-search").value = "";
+    $("watch-menu").hidden = true;
+    $("watch-search").focus();
+  });
+  $("watch-chips").addEventListener("click", e => {
+    const b = e.target.closest(".chip[data-coin]");
+    if (!b) return;
+    state.watch.delete(b.dataset.coin);
+    watchChanged();
+  });
+
+  $("csv-btn").addEventListener("click", exportCsv);
+
+  $("prev").addEventListener("click", () => { if (state.page > 0) { state.page--; render(); } });
+  $("next").addEventListener("click", () => {
+    if ((state.page + 1) * PER_PAGE < state.idx.length) { state.page++; render(); }
+  });
 }
 
 function render() {
@@ -289,117 +526,6 @@ function render() {
   $("next").disabled = startRow + PER_PAGE >= n;
 }
 
-/* ---------------- CSV export ---------------- */
-
-// Exports the filtered set (all pages, current sort order). Built in chunks
-// with a yield between each so an "All"-preset export (~500k rows) doesn't
-// freeze the tab; Blob accepts the parts array without one giant join.
-async function exportCsv() {
-  const btn = $("csv-btn");
-  btn.disabled = true;
-  const oldLabel = btn.textContent;
-  try {
-    const idx = state.idx;
-    const parts = ["time_utc,instrument,dex,category,hourly_rate,annualized_rate\n"];
-    const CHUNK = 50000;
-    for (let start = 0; start < idx.length; start += CHUNK) {
-      const end = Math.min(start + CHUNK, idx.length);
-      const rows = [];
-      for (let k = start; k < end; k++) {
-        const i = idx[k];
-        const inst = state.inst[state.instId[i]];
-        const r = state.r[i];
-        rows.push(`${new Date(state.t[i]).toISOString()},${inst.sym},${inst.dex || "main"},${inst.cat},${r},${r * HOURS_PER_YEAR}`);
-      }
-      parts.push(rows.join("\n") + "\n");
-      btn.textContent = `preparing… ${Math.round(end / idx.length * 100)}%`;
-      await new Promise(res => setTimeout(res, 0));
-    }
-    const day = ms => new Date(ms).toISOString().slice(0, 10);
-    const url = URL.createObjectURL(new Blob(parts, { type: "text/csv" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `funding-history_${day(state.filter.fromMs)}_${day(state.filter.toMs)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = oldLabel;
-  }
-}
-
-/* ---------------- controls ---------------- */
-
-function setPressed(container, pressedEl) {
-  container.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", String(c === pressedEl)));
-}
-
-function applyPreset(preset) {
-  const now = Date.now();
-  const spans = { "24h": 864e5, "7d": 7 * 864e5, "30d": 30 * 864e5 };
-  state.filter.toMs = now;
-  state.filter.fromMs = preset === "all"
-    ? state.t.reduce((min, v) => Math.min(min, v), Infinity)
-    : now - spans[preset];
-  $("from").value = msToInput(state.filter.fromMs);
-  $("to").value = msToInput(state.filter.toMs);
-}
-
-function wireControls() {
-  $("preset-chips").querySelectorAll(".chip").forEach(chip =>
-    chip.addEventListener("click", () => {
-      setPressed($("preset-chips"), chip);
-      applyPreset(chip.dataset.preset);
-      update();
-    }));
-
-  const onDateEdit = () => {
-    const from = inputToMs($("from").value);
-    const to = inputToMs($("to").value);
-    if (from === null || to === null) return;
-    state.filter.fromMs = from;
-    state.filter.toMs = to;
-    setPressed($("preset-chips"), null); // custom range: no preset active
-    update();
-  };
-  $("from").addEventListener("change", onDateEdit);
-  $("to").addEventListener("change", onDateEdit);
-
-  $("tz-toggle").addEventListener("click", () => {
-    state.utc = !state.utc;
-    const btn = $("tz-toggle");
-    btn.textContent = state.utc ? "UTC" : "local";
-    btn.setAttribute("aria-pressed", String(state.utc));
-    // same instants, re-expressed in the new zone
-    $("from").value = msToInput(state.filter.fromMs);
-    $("to").value = msToInput(state.filter.toMs);
-    render();
-  });
-
-  $("cat-chips").querySelectorAll(".chip").forEach(chip =>
-    chip.addEventListener("click", () => {
-      setPressed($("cat-chips"), chip);
-      state.filter.cat = chip.dataset.cat;
-      update();
-    }));
-
-  let debounce;
-  $("search").addEventListener("input", () => {
-    clearTimeout(debounce);
-    debounce = setTimeout(() => {
-      state.filter.q = $("search").value.trim().toLowerCase();
-      update();
-    }, 200);
-  });
-
-  $("csv-btn").addEventListener("click", exportCsv);
-
-  $("prev").addEventListener("click", () => { if (state.page > 0) { state.page--; render(); } });
-  $("next").addEventListener("click", () => {
-    if ((state.page + 1) * PER_PAGE < state.idx.length) { state.page++; render(); }
-  });
-}
-
 /* ---------------- boot ---------------- */
 
 async function boot() {
@@ -412,7 +538,18 @@ async function boot() {
       `<tr><td class="muted left" colspan="4">Could not load data/funding/ — run scripts/refresh_funding.py and redeploy.</td></tr>`;
     return;
   }
+  // drop watchlist entries for coins that no longer exist in the bake
+  const known = new Set(state.inst.map(i => i.coin));
+  state.watch = new Set([...loadWatch()].filter(c => known.has(c)));
+  saveWatch();
+
   wireControls();
+  const tzBtn = $("tz-toggle"); // markup defaults to local; honor a saved UTC pref
+  tzBtn.textContent = state.utc ? "UTC" : "local";
+  tzBtn.setAttribute("aria-pressed", String(state.utc));
+
+  renderWatchChips();
+  updateCsvBtn();
   applyPreset("7d"); // matches the chip pre-pressed in history.html
   applyFilter();
   computeSummary();

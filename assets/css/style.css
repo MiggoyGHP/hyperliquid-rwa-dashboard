@@ -185,6 +185,21 @@ button.chip:hover { color: var(--ink); border-color: var(--accent); }
 button.chip[aria-pressed="true"] { background: var(--pos-dim); color: var(--accent); border-color: var(--pos); }
 button.chip[disabled] { opacity: 0.4; cursor: default; }
 
+/* watchlist picker (history page summary) */
+.watch-picker { position: relative; }
+#watch-menu {
+  position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; min-width: 260px;
+  max-height: 300px; overflow-y: auto;
+  background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 7px;
+}
+#watch-menu button {
+  display: block; width: 100%; text-align: left; padding: 7px 12px;
+  background: none; border: 0; color: var(--ink-2); font: 13px var(--font-body); cursor: pointer;
+}
+#watch-menu button:hover { background: var(--surface-3); color: var(--ink); }
+#watch-menu .nm { color: var(--ink-3); font-size: 11.5px; margin-left: 7px; }
+#watch-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
 /* ---------- tables ---------- */
 .tbl-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }

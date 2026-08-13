@@ -89,7 +89,17 @@ async function refreshLoop() {
       renderOverview();
     } catch { /* transient */ }
   }, 60_000);
-  setInterval(() => { $("board-time").textContent = new Date().toUTCString().slice(17, 25) + " UTC"; }, 1000);
+  // local clock by default; "ndad.tz" (set by the history page toggle) can pin it to UTC
+  const utc = localStorage.getItem("ndad.tz") === "utc";
+  const pad = x => String(x).padStart(2, "0");
+  const offMin = -new Date().getTimezoneOffset();
+  const offStr = `UTC${offMin < 0 ? "-" : "+"}${pad(Math.floor(Math.abs(offMin) / 60))}:${pad(Math.abs(offMin) % 60)}`;
+  setInterval(() => {
+    const d = new Date();
+    $("board-time").textContent = utc
+      ? d.toUTCString().slice(17, 25) + " UTC"
+      : `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${offStr}`;
+  }, 1000);
 }
 
 /* ---------------- hero board ---------------- */
