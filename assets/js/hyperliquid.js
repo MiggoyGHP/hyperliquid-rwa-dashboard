@@ -128,6 +128,8 @@ function readCandleCache(coin) {
     if (!raw) return null;
     const { at, t, c, v } = JSON.parse(raw);
     if (!Number.isFinite(at) || !Array.isArray(t) || t.length !== c.length || t.length !== v.length) return null;
+    // strictly ascending or the charts crash — discard so a clean refetch heals it
+    for (let i = 1; i < t.length; i++) if (t[i] <= t[i - 1]) return null;
     return { at, t, c, v };
   } catch { return null; }
 }
@@ -162,7 +164,14 @@ export async function getDailyCandles(coin) {
     type: "candleSnapshot",
     req: { coin, interval: "1d", startTime, endTime: Date.now() },
   });
-  if (Array.isArray(batch)) {
+  if (Array.isArray(batch) && batch.length) {
+    // The API snaps startTime down to the bar boundary, so the tail fetch can
+    // re-return bars we already hold — drop cached bars the batch supersedes
+    // (duplicate times crash lightweight-charts).
+    const cut = batch[0].t;
+    while (data.t.length && data.t[data.t.length - 1] >= cut) {
+      data.t.pop(); data.c.pop(); data.v.pop();
+    }
     for (const bar of batch) {
       data.t.push(bar.t);
       data.c.push(parseFloat(bar.c));
