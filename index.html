@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/css/style.css?v=ndad2">
+<link rel="stylesheet" href="assets/css/style.css?v=ndad3">
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -86,6 +86,20 @@
     <div class="chart-card">
       <h3>Funding stability</h3>
       <div class="tiles" id="stability-tiles" style="margin:0"></div>
+    </div>
+
+    <div class="two-col">
+      <div class="chart-card" id="volume-card">
+        <h3>Volume history</h3>
+        <p class="sub">Daily perp volume on Hyperliquid, USD notional (contracts traded × close). Live from the candle API, ~2 years.</p>
+        <div class="chart-box" id="volume-chart"></div>
+      </div>
+      <div class="chart-card" id="oi-card">
+        <h3>Open interest history</h3>
+        <p class="sub">USD value of open contracts at each daily snapshot (open interest × mark price).</p>
+        <div class="chart-box" id="oi-chart"></div>
+        <p class="sub" id="oi-note" hidden></p>
+      </div>
     </div>
 
     <div class="chart-card" id="candles-card">

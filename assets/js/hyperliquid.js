@@ -6,6 +6,11 @@ const PAGE = 500; // fundingHistory returns at most 500 hourly records per call
 const CACHE_PREFIX = "fh1:"; // bump the prefix to invalidate old cache layouts
 const MAX_CACHED = 12; // localStorage is ~5 MB; each ticker ~120 KB
 
+const CANDLE_PREFIX = "cd1:"; // daily-candle cache, own namespace + LRU
+const MAX_CANDLE_CACHED = 16; // ~25 KB per coin (730 bars × 3 numbers)
+const CANDLE_TTL_MS = 15 * 60e3;
+const CANDLE_DAYS = 730; // ~2y, matching the baked stock OHLC window
+
 async function request(body) {
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(API, {
@@ -115,6 +120,58 @@ export async function getRecentFunding(coin) {
   }
   recentCache.set(coin, out);
   return out;
+}
+
+function readCandleCache(coin) {
+  try {
+    const raw = localStorage.getItem(CANDLE_PREFIX + coin);
+    if (!raw) return null;
+    const { at, t, c, v } = JSON.parse(raw);
+    if (!Number.isFinite(at) || !Array.isArray(t) || t.length !== c.length || t.length !== v.length) return null;
+    return { at, t, c, v };
+  } catch { return null; }
+}
+
+function writeCandleCache(coin, data) {
+  try {
+    localStorage.setItem(CANDLE_PREFIX + coin, JSON.stringify(data));
+    const key = CANDLE_PREFIX + "lru";
+    const lru = (JSON.parse(localStorage.getItem(key)) || []).filter(c => c !== coin);
+    lru.push(coin);
+    while (lru.length > MAX_CANDLE_CACHED) {
+      localStorage.removeItem(CANDLE_PREFIX + lru.shift());
+    }
+    localStorage.setItem(key, JSON.stringify(lru));
+  } catch { /* quota exceeded: live without the cache */ }
+}
+
+// Daily perp candles, ~2 years back, for volume history and volume averages.
+// Returns { t: [ms bar-open…], c: [close…], v: [base-unit volume…] } ascending;
+// the last bar is today's still-forming candle. Empty arrays = no candles for
+// this coin (dead dex) — cached too, so the TTL stops refetch-hammering.
+// candleSnapshot is weight-heavy like fundingHistory, so it shares that lane.
+export async function getDailyCandles(coin) {
+  const cached = readCandleCache(coin);
+  if (cached && Date.now() - cached.at < CANDLE_TTL_MS) return cached;
+
+  const data = cached ?? { t: [], c: [], v: [] };
+  if (data.t.length) data.t.pop(), data.c.pop(), data.v.pop(); // last bar was still forming
+  const startTime = data.t.length ? data.t[data.t.length - 1] + 1
+                                  : Date.now() - CANDLE_DAYS * 864e5;
+  const batch = await post({
+    type: "candleSnapshot",
+    req: { coin, interval: "1d", startTime, endTime: Date.now() },
+  });
+  if (Array.isArray(batch)) {
+    for (const bar of batch) {
+      data.t.push(bar.t);
+      data.c.push(parseFloat(bar.c));
+      data.v.push(parseFloat(bar.v));
+    }
+  }
+  data.at = Date.now();
+  writeCandleCache(coin, data);
+  return data;
 }
 
 // Full hourly funding history for one coin, since listing.

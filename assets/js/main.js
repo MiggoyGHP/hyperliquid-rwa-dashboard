@@ -1,11 +1,14 @@
-import { getAssetCtxs, getFundingHistory, getRecentFunding } from "./hyperliquid.js";
-import { getMeta, getOhlc, getOptions } from "./baked.js";
+import { getAssetCtxs, getFundingHistory, getRecentFunding, getDailyCandles } from "./hyperliquid.js";
+import { getMeta, getOhlc, getOptions, getOiSnapshots } from "./baked.js";
 import { getDeribitOptions } from "./deribit.js";
 import {
   fundingWindows, annualizedSeries, cumulativeSeries, dailyAprSeries, worstRolling30d, stabilityStats,
-  fmtPct, fmtAprPct, fmtUsd, HOURS_PER_YEAR,
+  fmtPct, fmtAprPct, fmtUsd, fmtCompactUsd, HOURS_PER_YEAR,
 } from "./funding.js";
-import { renderFundingChart, renderCumulativeChart, renderCandles, emaSeries, clearChart, legend } from "./charts.js";
+import {
+  renderFundingChart, renderCumulativeChart, renderCandles, renderVolumeChart, renderOiChart,
+  emaSeries, clearChart, legend,
+} from "./charts.js";
 import { initChain } from "./optionsTable.js";
 import { VARIANTS, defaultStrike, compute } from "./strategy.js";
 import { renderRiskReward } from "./riskpanel.js";
@@ -20,6 +23,7 @@ const state = {
   summary: null,          // coin -> {apr30, days, n} baked 30d means (data/funding/summary.json)
   rows: [],               // joined baked+live ticker rows
   histories: new Map(),   // coin -> { t, r }
+  avgVol30: new Map(),    // coin -> mean daily USD volume, last ≤30 complete candles
   windows: new Map(),     // coin -> fundingWindows result
   selected: null,
   catFilter: "all",
@@ -145,12 +149,36 @@ function renderBoard() {
   const top = rows.slice(0, 8);
   $("board-rows").innerHTML = top.map(({ r, apr }) => `
     <button class="board-row" data-coin="${r.coin}">
-      <span><span class="sym">${r.sym}</span>${catTags(r)}<span class="nm">${r.name}</span></span>
-      <span class="apr ${apr >= 0 ? "pos" : "neg"}">${fmtAprPct(apr)}</span>
+      <span class="board-top">
+        <span><span class="sym">${r.sym}</span>${catTags(r)}<span class="nm">${r.name}</span></span>
+        <span class="apr ${apr >= 0 ? "pos" : "neg"}">${fmtAprPct(apr)}</span>
+      </span>
+      <span class="board-stats">24h vol ${fmtCompactUsd(r.ctx?.dayNtlVlm)} · 30d avg ${fmtCompactUsd(state.avgVol30.get(r.coin))}</span>
     </button>`).join("");
   $("board-note").textContent = BOARD_NOTES[mode];
   $("board-rows").querySelectorAll("[data-coin]").forEach(el =>
     el.addEventListener("click", () => select(el.dataset.coin)));
+  fillHeroVolumes();
+}
+
+// 30d average volumes arrive after the board is up: one paced candle call per
+// hero coin, each re-rendering the board as it lands. Failures park a NaN in
+// the map (renders "—") so a coin is never refetched in a loop.
+const heroVolPending = new Set();
+function fillHeroVolumes() {
+  const top = heroRank().rows.slice(0, 8).map(x => x.r.coin);
+  for (const coin of top) {
+    if (state.avgVol30.has(coin) || heroVolPending.has(coin)) continue;
+    heroVolPending.add(coin);
+    getDailyCandles(coin).then(cd => {
+      const n = Math.min(30, cd.t.length - 1); // drop today's still-forming bar
+      let sum = 0;
+      for (let i = cd.t.length - 1 - n; i < cd.t.length - 1; i++) sum += cd.v[i] * cd.c[i];
+      state.avgVol30.set(coin, n > 0 ? sum / n : NaN);
+      renderBoard();
+    }).catch(() => state.avgVol30.set(coin, NaN))
+      .finally(() => heroVolPending.delete(coin));
+  }
 }
 
 // Category pill for non-stocks + a muted dex badge for builder-dex perps.
@@ -171,14 +199,6 @@ const COLS = [
   { key: "d30", label: "30d (APR)", sortable: true },
   { key: "vol", label: "Perp 24h volume", sortable: true },
 ];
-
-const fmtCompactUsd = x => {
-  if (!Number.isFinite(x)) return "—";
-  if (x >= 1e9) return "$" + (x / 1e9).toFixed(1) + "B";
-  if (x >= 1e6) return "$" + (x / 1e6).toFixed(1) + "M";
-  if (x >= 1e3) return "$" + (x / 1e3).toFixed(0) + "K";
-  return "$" + x.toFixed(0);
-};
 
 function rowValue(r, key) {
   const w = state.windows.get(r.coin);
@@ -323,6 +343,37 @@ function renderAbout(row) {
     (p.network ? fact("Network", p.network) : "");
 }
 
+// Daily USD-notional volume histogram from live Hyperliquid candles. A coin
+// with no candles at all (dead builder dex) hides the card entirely.
+async function renderVolumeSection(row) {
+  let cd = null;
+  try { cd = await getDailyCandles(row.coin); } catch { /* card just hides */ }
+  if (state.selected !== row.coin) return; // user moved on while we fetched
+  if (!cd || !cd.t.length) { $("volume-card").hidden = true; return; }
+  renderVolumeChart($("volume-chart"),
+    cd.t.map((t, i) => ({ time: Math.floor(t / 1000), value: cd.v[i] * cd.c[i] })));
+}
+
+// USD open interest from the baked snapshot series. Hyperliquid has no OI
+// history endpoint, so the series only accumulates one point per daily bake —
+// until a coin has a few points, explain that instead of charting nothing.
+async function renderOiSection(row) {
+  const snaps = await getOiSnapshots().catch(() => null); // 404s before the first bake
+  if (state.selected !== row.coin) return; // user moved on while we fetched
+  const s = snaps?.coins?.[row.coin];
+  const pts = s ? s.t.map((t, i) => ({ time: t, value: s.oi[i] * s.px[i] })) : [];
+  if (pts.length < 2) {
+    clearChart($("oi-chart"));
+    $("oi-chart").style.display = "none";
+    $("oi-note").hidden = false;
+    $("oi-note").textContent = pts.length
+      ? `Collecting daily snapshots since ${new Date(s.t[0] * 1000).toISOString().slice(0, 10)} — the chart appears once a few days of data exist.`
+      : "Open interest snapshots start accumulating with the next daily data refresh.";
+    return;
+  }
+  renderOiChart($("oi-chart"), pts);
+}
+
 async function select(coin) {
   const row = state.rows.find(r => r.coin === coin);
   if (!row) return;
@@ -350,6 +401,17 @@ async function select(coin) {
   $("funding-tiles").innerHTML =
     `<div class="loading"><span class="spin"></span>fetching this ticker's full funding history from Hyperliquid — first visit takes ~15 seconds, instant after that…</div>`;
   $("stability-tiles").innerHTML = "";
+
+  // Volume/OI cards render independently the moment their data arrives; reset
+  // them synchronously so the previous coin's charts never linger.
+  $("volume-card").hidden = false;
+  $("oi-card").hidden = false;
+  $("oi-note").hidden = true;
+  $("oi-chart").style.display = "";
+  clearChart($("volume-chart"));
+  clearChart($("oi-chart"));
+  renderVolumeSection(row);
+  renderOiSection(row);
 
   const histP = loadFullHistory(coin);
   let options = null;

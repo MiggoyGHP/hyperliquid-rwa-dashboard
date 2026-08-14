@@ -5,7 +5,7 @@ perps in tickers.CRYPTO (BTC/ETH/HYPE). History goes back to true inception
 (fundingHistory with startTime=0): main-dex coins reach May 2023 with 8h-spaced
 early records, xyz stocks start 2025-11-13 — never assume hourly spacing.
 
-Outputs (all under data/funding/):
+Outputs (all under data/funding/ except the OI snapshots):
   index.json          manifest: which dex bundles exist, counts, errors.
                       The frontend iterates this instead of hardcoding dexes.
   summary.json        per-coin trailing 30d mean funding, annualized:
@@ -16,6 +16,11 @@ Outputs (all under data/funding/):
                       {"dex", "generatedAt", "coins": {coin: {t, r, p}}}
                       t = epoch seconds ascending, r = hourly decimal rate,
                       p = premium (null when the API omits it)
+  ../oi/snapshots.json  append-only open-interest/volume series, one point per
+                      run: {"generatedAt", "coins": {coin: {t, oi, px, vlm}}}
+                      t = epoch seconds, oi = coin units, px = mark price,
+                      vlm = trailing-24h USD notional. Hyperliquid exposes no
+                      OI history endpoint, so this accumulates going forward.
 
 Incremental: each run resumes every coin from its last baked timestamp, so
 only the first run (or a new listing) pays the full backfill. Coins that
@@ -40,6 +45,7 @@ from refresh_data import write_json, with_retries, log
 
 ROOT = Path(__file__).resolve().parent.parent
 FUNDING_DIR = ROOT / "data" / "funding"
+OI_PATH = ROOT / "data" / "oi" / "snapshots.json"
 API = "https://api.hyperliquid.xyz/info"
 
 # Keep in sync with DEXES in assets/js/classify.js ("" = main dex).
@@ -71,12 +77,28 @@ def dex_label(dex: str) -> str:
 
 
 def fetch_live_coins(dex: str):
-    """Non-delisted coin names for a dex; builder-dex names arrive prefixed."""
-    meta, _ctxs = post({"type": "metaAndAssetCtxs", **({"dex": dex} if dex else {})})
-    coins = [a["name"] for a in meta["universe"] if not a.get("isDelisted")]
+    """(coin names, {coin: (oi, px, vlm)}) for non-delisted assets on a dex.
+
+    Builder-dex names arrive prefixed. The snapshot half feeds the append-only
+    OI series; a coin with a malformed ctx just skips its snapshot this run.
+    """
+    meta, ctxs = post({"type": "metaAndAssetCtxs", **({"dex": dex} if dex else {})})
+    coins, snaps = [], {}
+    for asset, ctx in zip(meta["universe"], ctxs):
+        if asset.get("isDelisted"):
+            continue
+        name = asset["name"]
+        coins.append(name)
+        try:
+            snaps[name] = (round(float(ctx["openInterest"]), 3),
+                           round(float(ctx["markPx"]), 6),
+                           round(float(ctx["dayNtlVlm"])))
+        except (KeyError, TypeError, ValueError):
+            pass
     if dex == "":
         coins = [c for c in coins if c in CRYPTO]
-    return coins
+        snaps = {c: v for c, v in snaps.items() if c in CRYPTO}
+    return coins, snaps
 
 
 def fetch_coin_history(coin: str, start_ms: int):
@@ -99,13 +121,18 @@ def fetch_coin_history(coin: str, start_ms: int):
     return out
 
 
-def bake_dex(dex: str, errors: list):
-    """Update one dex bundle in place. Returns (live, failed, records) counts."""
+def bake_dex(dex: str, errors: list, snapshots: dict):
+    """Update one dex bundle in place. Returns (live, failed, records) counts.
+
+    Also deposits this dex's OI/volume snapshot into the shared `snapshots`
+    dict; a dex that fails to answer simply contributes nothing this run.
+    """
     path = FUNDING_DIR / dex_filename(dex)
     bundle = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"coins": {}}
     coins = bundle["coins"]
 
-    live = with_retries(lambda: fetch_live_coins(dex))
+    live, snaps = with_retries(lambda: fetch_live_coins(dex))
+    snapshots.update(snaps)
     if not live and not coins:
         log(f"dex {dex_label(dex)}: no live assets, skipping")
         return 0, 0, 0
@@ -139,6 +166,37 @@ def bake_dex(dex: str, errors: list):
     })
     log(f"dex {dex_label(dex)}: {len(coins)} coins, {records} records ({failed} failed)")
     return len(live), failed, records
+
+
+def append_snapshots(snapshots, now_s):
+    """Append one OI/volume point per captured coin to the snapshot series.
+
+    Only coins fetched this run get an append (a --dexes subset run leaves
+    everything else untouched); an unreadable existing file is never clobbered.
+    """
+    if not snapshots:
+        log("oi snapshots: nothing captured this run, keeping old file")
+        return
+    if OI_PATH.exists():
+        try:
+            data = json.loads(OI_PATH.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001 - corrupt file: leave for manual fix
+            log(f"oi snapshots: existing file unreadable ({e}) — skipping write")
+            return
+    else:
+        data = {"coins": {}}
+    coins = data["coins"]
+    for coin, (oi, px, vlm) in snapshots.items():
+        entry = coins.setdefault(coin, {"t": [], "oi": [], "px": [], "vlm": []})
+        if entry["t"] and entry["t"][-1] == now_s:
+            continue  # same-second rerun
+        entry["t"].append(now_s)
+        entry["oi"].append(oi)
+        entry["px"].append(px)
+        entry["vlm"].append(vlm)
+    data["generatedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    write_json(OI_PATH, data)
+    log(f"oi snapshots: appended {len(snapshots)} coins (file has {len(coins)})")
 
 
 def summarize_coins(coins, now_s, out):
@@ -183,9 +241,10 @@ def main():
 
     errors = []
     total_live = total_failed = 0
+    snapshots = {}
     for dex in dexes:
         try:
-            live, failed, _records = bake_dex(dex, errors)
+            live, failed, _records = bake_dex(dex, errors, snapshots)
         except Exception as e:  # noqa: BLE001 - one dead dex shouldn't kill the run
             errors.append({"coin": f"{dex_label(dex)}:*", "error": str(e)})
             log(f"dex {dex_label(dex)}: FAILED ({e})")
@@ -193,11 +252,13 @@ def main():
         total_live += live
         total_failed += failed
 
+    now_s = int(time.time())
+    append_snapshots(snapshots, now_s)
+
     # Manifest and summary cover every bundle on disk, not just this run's
     # subset, so a --dexes smoke test never hides other dexes from the frontend.
     manifest_dexes = []
     summary_coins = {}
-    now_s = int(time.time())
     for dex in DEXES:
         path = FUNDING_DIR / dex_filename(dex)
         if not path.exists():

@@ -127,3 +127,12 @@ export const fmtAprPct = (x, dp = 1) =>
 export const fmtUsd = (x, dp = 0) =>
   x === null || x === undefined || Number.isNaN(x) ? "—"
     : (x < 0 ? "-$" : "$") + Math.abs(x).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+
+export const fmtCompactUsd = x => {
+  if (!Number.isFinite(x)) return "—";
+  const a = Math.abs(x), s = x < 0 ? "-$" : "$";
+  if (a >= 1e9) return s + (a / 1e9).toFixed(1) + "B";
+  if (a >= 1e6) return s + (a / 1e6).toFixed(1) + "M";
+  if (a >= 1e3) return s + (a / 1e3).toFixed(0) + "K";
+  return s + a.toFixed(0);
+};

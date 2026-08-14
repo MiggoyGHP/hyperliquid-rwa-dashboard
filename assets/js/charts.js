@@ -1,4 +1,6 @@
 // Thin wrappers around TradingView lightweight-charts v4 (global from CDN).
+import { fmtCompactUsd } from "./funding.js";
+
 const LWC = window.LightweightCharts;
 
 const COLOR = {
@@ -73,6 +75,33 @@ export function renderCumulativeChart(el, points) {
   });
   series.setData(points);
   series.createPriceLine({ price: 0, color: COLOR.ink3, lineWidth: 1, lineStyle: 3, axisLabelVisible: false });
+  chart.timeScale().fitContent();
+  return chart;
+}
+
+// Daily USD-notional perp volume as a histogram. Violet: teal/rose mean
+// earning/paying site-wide, and volume is a market-structure series.
+export function renderVolumeChart(el, points) {
+  const chart = freshChart(el);
+  const series = chart.addHistogramSeries({
+    color: "rgba(139, 111, 232, 0.65)", // COLOR.violet at 65%
+    priceFormat: { type: "custom", formatter: fmtCompactUsd },
+    priceLineVisible: false, lastValueVisible: false,
+  });
+  series.setData(points);
+  chart.timeScale().fitContent();
+  return chart;
+}
+
+// USD open interest at each baked snapshot, as an area.
+export function renderOiChart(el, points) {
+  const chart = freshChart(el);
+  const series = chart.addAreaSeries({
+    lineColor: COLOR.violet, topColor: "rgba(139, 111, 232, 0.22)", bottomColor: "transparent",
+    lineWidth: 2,
+    priceFormat: { type: "custom", formatter: fmtCompactUsd },
+  });
+  series.setData(points);
   chart.timeScale().fitContent();
   return chart;
 }
