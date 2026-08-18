@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .venv/
 .DS_Store
-.claude/
+# .claude/* not .claude/ — git cannot re-include from an excluded directory.
+# Agents are shared project tooling; settings.local.json stays private.
+.claude/*
+!.claude/agents/
 .playwright-mcp/
 *.jpeg

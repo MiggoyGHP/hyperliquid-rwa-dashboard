@@ -1,0 +1,11 @@
+{
+  "_readme": "Funding hours Hyperliquid genuinely never settled. Verified absent from the venue's own fundingHistory endpoint, so re-fetching can never fill them. Listed here so scripts/funding_audit.py converges to green instead of alarming forever - an allowlist entry is an acknowledgement, never a way to silence a real defect. Each entry needs a reason and the date it was verified. Signature of a venue event: the same hour missing for EVERY coin listed at that time; a gap on only some coins points at our pipeline instead and must not be added here.",
+  "gaps": [
+    { "coin": "BTC", "t": 1688328000, "utc": "2023-07-02T20:00:00Z", "reason": "venue-wide funding outage; hour absent from HL fundingHistory (BTC and ETH were the only listed assets, both missing it)", "verified": "2026-08-18" },
+    { "coin": "ETH", "t": 1688328000, "utc": "2023-07-02T20:00:00Z", "reason": "venue-wide funding outage; hour absent from HL fundingHistory (BTC and ETH were the only listed assets, both missing it)", "verified": "2026-08-18" },
+    { "coin": "BTC", "t": 1692820800, "utc": "2023-08-23T20:00:00Z", "reason": "venue-wide funding outage; hour absent from HL fundingHistory (BTC and ETH were the only listed assets, both missing it)", "verified": "2026-08-18" },
+    { "coin": "ETH", "t": 1692820800, "utc": "2023-08-23T20:00:00Z", "reason": "venue-wide funding outage; hour absent from HL fundingHistory (BTC and ETH were the only listed assets, both missing it)", "verified": "2026-08-18" },
+    { "coin": "BTC", "t": 1723726800, "utc": "2024-08-15T13:00:00Z", "reason": "venue-wide funding outage; hour absent from HL fundingHistory (BTC and ETH were the only listed assets, both missing it)", "verified": "2026-08-18" },
+    { "coin": "ETH", "t": 1723726800, "utc": "2024-08-15T13:00:00Z", "reason": "venue-wide funding outage; hour absent from HL fundingHistory (BTC and ETH were the only listed assets, both missing it)", "verified": "2026-08-18" }
+  ]
+}

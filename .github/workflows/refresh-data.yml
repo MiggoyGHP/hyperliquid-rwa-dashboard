@@ -27,6 +27,14 @@ jobs:
         if: ${{ !cancelled() }}
       - run: python scripts/refresh_profiles.py
         if: ${{ !cancelled() }}
+      # Tripwire, not a gate: refresh_funding.py has already deduped, sorted and
+      # refilled what it could, so this only fires on residue that needs a human
+      # (or the funding-integrity-triage agent). It runs before the commit and
+      # does not block it — the repaired data still ships, the run just goes red
+      # so the failure email lands the same day instead of months later.
+      - name: Audit funding integrity
+        if: ${{ !cancelled() }}
+        run: python scripts/funding_audit.py
       - name: Commit refreshed data
         if: ${{ !cancelled() }}
         run: |

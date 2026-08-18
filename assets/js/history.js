@@ -41,6 +41,23 @@ const state = {
 
 /* ---------------- loading ---------------- */
 
+// The baker keeps timestamps strictly ascending, so this should never drop
+// anything. It stays because it is the last line of defence: a stale bundle
+// from a cached deploy would otherwise silently inflate every sum on the page
+// and the period counts along with them — the failure that shipped once.
+function dedupe(t, r, onDrop) {
+  let bad = 0;
+  for (let i = 1; i < t.length; i++) if (t[i] <= t[i - 1]) { bad++; }
+  if (!bad) return [t, r];
+  const outT = [], outR = [];
+  for (let i = 0; i < t.length; i++) {
+    if (outT.length && t[i] <= outT[outT.length - 1]) continue;
+    outT.push(t[i]); outR.push(r[i]);
+  }
+  onDrop(t.length - outT.length);
+  return [outT, outR];
+}
+
 async function loadAll() {
   const index = await (await fetch("data/funding/index.json")).json();
   const metaNames = {}; // proper names from baked meta (Bitcoin, Apple, …), best-effort
@@ -53,12 +70,14 @@ async function loadAll() {
 
   const failed = [];
   const slices = []; // [coin, t[], r[]]
+  let dropped = 0;
   results.forEach((res, i) => {
     if (res.status === "rejected") { failed.push(index.dexes[i].file); return; }
     for (const [coin, s] of Object.entries(res.value.coins)) {
-      if (s.t.length) slices.push([coin, s.t, s.r]);
+      if (s.t.length) slices.push([coin, ...dedupe(s.t, s.r, n => (dropped += n))]);
     }
   });
+  if (dropped) console.warn(`history: ignored ${dropped} duplicate funding record(s) — run scripts/funding_audit.py`);
   if (failed.length) {
     const note = $("hist-note");
     note.hidden = false;
@@ -93,6 +112,26 @@ async function loadAll() {
 
   state.bakedMs = Date.parse(index.generatedAt);
   renderBakedBadge();
+  reportHealth();
+}
+
+// health.json is written by every bake (scripts/funding_audit.py). Anything but
+// "ok" means the sentinel found something it could not repair on its own, and
+// the numbers on this page may be built on incomplete data — say so rather than
+// rendering a confident-looking table over it. Best-effort: an older deploy
+// without the file just shows nothing.
+async function reportHealth() {
+  try {
+    const h = await (await fetch("data/funding/health.json")).json();
+    if (h.status === "ok") return;
+    const bits = [];
+    if (h.unresolved?.length) bits.push(`${h.unresolved.length} unexplained gap(s)`);
+    if (h.conflicts?.length) bits.push(`${h.conflicts.length} conflicting record(s)`);
+    if (h.duplicates) bits.push(`${h.duplicates} duplicate(s)`);
+    const note = $("hist-note");
+    note.hidden = false;
+    note.textContent = `Data health: ${bits.join(", ") || "degraded"} — see data/funding/health.json.`;
+  } catch { /* no health file on this deploy */ }
 }
 
 /* ---------------- filter / sort ---------------- */

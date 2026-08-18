@@ -44,6 +44,31 @@ python -m http.server 8000                            # then open http://localho
 `scripts/tickers.py` is the hand-curated map of xyz coins → Yahoo symbols; coins on the
 DEX but missing from it are reported as `unmappedCoins` in `data/meta.json`.
 
+## Funding-data integrity
+
+`scripts/refresh_funding.py` keeps each coin's timestamps strictly ascending, deduplicates
+and re-sorts whatever is already on disk before adding to it, and refills detected gaps with
+targeted `startTime`/`endTime` fetches. It is self-healing: a bundle corrupted by an older
+build is repaired on the next run.
+
+```bash
+python scripts/funding_audit.py          # exits 1 if anything is off
+python scripts/funding_audit.py --json   # machine-readable
+```
+
+The audit snaps every timestamp to its expected settlement slot rather than comparing raw
+deltas — Hyperliquid stamps funding with millisecond jitter, so consecutive deltas of 3601
+then 3599 are normal and delta-comparison would flag dozens of false positives. It reports
+duplicates, gaps, off-grid records and cadence changes; the daily workflow runs it and fails
+loudly on anything it could not repair. Status is written to `data/funding/health.json`
+(the history page shows a warning when it is not `ok`).
+
+Hours Hyperliquid genuinely never settled live in `data/funding/known_gaps.json`, so the
+audit converges to green instead of alarming forever. Add an entry only when the hour is
+missing for *every* coin listed at that time — a gap on a subset means our pipeline is at
+fault. `.claude/agents/funding-integrity-triage.md` investigates whatever the audit cannot
+resolve on its own; it proposes, and never edits `data/`.
+
 ## API keys
 
 There are none. Every API this site touches (Hyperliquid info, Cboe delayed quotes,

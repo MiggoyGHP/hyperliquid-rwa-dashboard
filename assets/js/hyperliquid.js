@@ -84,6 +84,9 @@ function readCache(coin) {
     if (!raw) return null;
     const { t, r } = JSON.parse(raw);
     if (!Array.isArray(t) || t.length !== r.length) return null;
+    // Strictly ascending or the trailing-window sums double-count — same guard
+    // readCandleCache uses. A cache written by an older build heals on refetch.
+    for (let i = 1; i < t.length; i++) if (t[i] <= t[i - 1]) return null;
     return { t, r };
   } catch { return null; }
 }
