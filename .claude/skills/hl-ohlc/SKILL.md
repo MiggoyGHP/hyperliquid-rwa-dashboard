@@ -16,7 +16,7 @@ python scripts/ohlc.py CL --days 30
 python scripts/ohlc.py CL --start 2026-08-01 --end 2026-08-18   # both inclusive
 python scripts/ohlc.py BTC --interval 1h --days 3
 python scripts/ohlc.py xyz:CL --days 5 --json     # to compute on the numbers
-python scripts/ohlc.py --list                     # 137 known coins, by dex
+python scripts/ohlc.py --list                     # every known coin, by dex
 ```
 
 Show the table as printed — it is already aligned and captioned. Reach for
@@ -24,10 +24,15 @@ Show the table as printed — it is already aligned and captioned. Reach for
 
 ## Symbols
 
-Bare names resolve on their own (`CL` -> `xyz:CL`). Main-dex coins (`BTC`,
-`ETH`, `HYPE`) are stored unprefixed and win over a same-named twin on a
-builder dex — reach those explicitly (`hyna:BTC`). A name listed on two builder
-dexes (`AVGO`, `UNITREE`) errors and prints the candidates.
+Bare names resolve on their own (`CL` -> `xyz:CL`). A name listed on more than
+one builder dex errors and prints the candidates — pass the prefixed one.
+
+Coverage is the baked funding set, not the whole venue: every builder-dex asset,
+but only `BTC`, `ETH` and `HYPE` from the main dex. Those three are stored
+unprefixed and win over a same-named twin on a builder dex — reach the twin
+explicitly (`hyna:BTC`). **Any other main-dex perp is unreachable**, and it fails
+quietly: a bare `SOL` resolves to the thin `hyna:SOL`, not the main-dex book.
+`--list` is the authority on what is addressable.
 
 ## Reading the output
 
@@ -35,7 +40,6 @@ dexes (`AVGO`, `UNITREE`) errors and prints the candidates.
 - **Non-crypto perps trade weekends**, so bars exist where NYMEX or NYSE has no
   session. They are real but thin — CL prints ~330k base units on a Saturday
   against ~2M midweek. That is the weekend, not a liquidity event.
-- **Volume is base units, not USD.**
 - **The final bar is still forming** and is marked `(in progress)`. Never quote
   it as a settled close.
 - **`Cov` is funding coverage** — records found against records expected for
