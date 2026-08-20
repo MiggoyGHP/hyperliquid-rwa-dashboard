@@ -69,6 +69,29 @@ missing for *every* coin listed at that time — a gap on a subset means our pip
 fault. `.claude/agents/funding-integrity-triage.md` investigates whatever the audit cannot
 resolve on its own; it proposes, and never edits `data/`.
 
+## Ad-hoc price lookups
+
+`scripts/ohlc.py` answers "what did this thing do, and did the carry hold while it did" for
+one coin, on demand. Nothing calls it and it writes nothing — it exists to be run by hand.
+
+```bash
+python scripts/ohlc.py xyz:CL                    # last 14 daily bars + funding
+python scripts/ohlc.py CL --start 2026-08-01 --end 2026-08-18
+python scripts/ohlc.py BTC --interval 1h --days 3
+python scripts/ohlc.py --list                    # every known coin, by dex
+```
+
+Price comes live from `candleSnapshot`; funding is joined from the baked `data/funding`
+bundles, so it costs no extra request. Because those are baked daily, the newest bars have
+no funding yet — each bar prints its coverage (`24/24`, `1/24`, `0/24`) and an APR is
+withheld rather than extrapolated from a partial day. Bare coin names resolve against the
+bundles, which `candleSnapshot` requires: it wants `xyz:CL` and returns HTTP 500 for `CL`.
+
+The venue retains only the most recent ~5000 bars per interval (`1m` ~3.6d, `1h` ~208d, `4h`
+~833d; `1d` reaches listing) and ignores an older `startTime` without saying so, so the
+script reports when a window came back short. `.claude/skills/hl-ohlc/` wires this up for
+Claude Code.
+
 ## API keys
 
 There are none. Every API this site touches (Hyperliquid info, Cboe delayed quotes,
